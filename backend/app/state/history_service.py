@@ -288,7 +288,7 @@ def _find_customer_by_identity(
         if customer is not None:
             return customer
 
-    if phone:
+    if phone and not email:
         customer = (
             db.query(Customer)
             .filter(
