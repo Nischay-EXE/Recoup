@@ -59,3 +59,30 @@ def test_mark_recovery_succeeded_updates_attempt_and_case():
         payment_id="pay_test_001",
         amount_recovered=Decimal("499.00"),
     )
+
+def test_duplicate_success_does_not_change_succeeded_attempt():
+    attempt = SimpleNamespace(
+        id=1000,
+        status="succeeded",
+        case_id="case_test_002",
+        order_id="order_test_002",
+        payment_id="pay_test_002",
+        amount_at_risk=Decimal("800.00"),
+        amount_recovered=Decimal("800.00"),
+        resolved_at=MagicMock(),
+    )
+
+    db = MagicMock()
+
+    result = mark_recovery_succeeded(
+        attempt=attempt,
+        db=db,
+        amount_recovered=Decimal("800.00"),
+    )
+
+    assert result is attempt
+    assert attempt.status == "succeeded"
+    assert attempt.amount_recovered == Decimal("800.00")
+
+    db.commit.assert_not_called()
+    db.refresh.assert_not_called()
