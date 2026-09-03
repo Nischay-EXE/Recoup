@@ -1,4 +1,4 @@
-# Revenue Recovery Agent
+# Rev Agent
 
 An event-driven AI system for detecting failed revenue events, understanding why they happened, deciding how to recover them, executing bounded recovery actions, and measuring the outcome.
 
