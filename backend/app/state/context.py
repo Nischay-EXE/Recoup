@@ -23,6 +23,7 @@ class RecoveryContext(BaseModel):
 
     event_id: str
     event_type: str
+    batch_id: str | None = None
 
     # --------------------------------------------------
     # Recovery case
@@ -87,3 +88,20 @@ class RecoveryContext(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict
     )
+
+        # --------------------------------------------------
+    # Revenue object
+    # --------------------------------------------------
+
+    revenue_object_type: str = "payment"
+
+    payment_id: str | None = None
+    order_id: str | None = None
+    subscription_id: str | None = None
+    invoice_id: str | None = None
+
+    amount: Decimal | None = None
+    currency: str | None = None
+
+    # Existing payment compatibility
+    payment_status: str | None = None

@@ -492,16 +492,29 @@ copy .env.example .env
 ```
 
 Configure the required credentials and settings inside `.env`.
+The Docker Compose PostgreSQL password is read from the `POSTGRES_PASSWORD` environment variable; do not put real credentials in source control.
 
-Do not commit `.env` or API credentials.
+## 3. Install backend dependencies
 
-## 3. Start FastAPI
+```powershell
+pip install -r requirements.txt
+```
+
+## 4. Apply database migrations
+
+```powershell
+alembic upgrade head
+```
+
+Alembic owns the database schema. Do not use `docker compose down -v` to reset development data.
+
+## 5. Start FastAPI
 
 ```powershell
 uvicorn app.main:app --reload --port 8000
 ```
 
-## 4. Start the Recovery Worker
+## 6. Start the Recovery Worker
 
 Open another terminal:
 
@@ -510,13 +523,27 @@ cd backend
 python -m app.worker.recovery_worker
 ```
 
-## 5. Run tests
+## 7. Run tests
 
 From `backend`:
 
 ```powershell
 pytest -q
 ```
+
+---
+
+# Recovery Batches
+
+A recovery batch is a reporting and investigation boundary for a new run. Starting a batch does **not** delete historical data.
+
+- The main dashboard remains all-time.
+- New ingested events are associated with the active batch.
+- Recovery cases, attempts, decisions, and escalations inherit that batch.
+- Batch detail exposes metrics plus drill-down into events and cases.
+- Close a batch when the run is complete.
+
+This allows a clean demo or E2E window while preserving the full audit history.
 
 ---
 

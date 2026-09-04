@@ -49,6 +49,10 @@ class RecoveryDecisionRecord(Base):
         nullable=False,
     )
 
+    batch_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -80,6 +84,18 @@ class RecoveryAttempt(Base):
     )
 
     order_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+
+    subscription_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+
+    invoice_id: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
         index=True,
@@ -150,9 +166,19 @@ class RecoveryAttempt(Base):
         nullable=False,
     )
 
+    scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        index=True,
+    )
+
     executed_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True,
+    )
+
+    batch_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
     )
 
     resolved_at: Mapped[datetime | None] = mapped_column(
@@ -209,6 +235,25 @@ class RecoveryCase(Base):
         index=True,
     )
 
+    revenue_object_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="payment",
+        index=True,
+    )
+
+    subscription_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+
+    invoice_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+
     original_payment_id: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
@@ -244,6 +289,10 @@ class RecoveryCase(Base):
         default=0,
     )
 
+    batch_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -253,4 +302,102 @@ class RecoveryCase(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True,
+    )
+
+class RecoveryEscalation(Base):
+    __tablename__ = "recovery_escalations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    case_id: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    reason_code: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+    )
+
+    summary: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    diagnosis: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    recommended_action: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    priority: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="high",
+    )
+
+    assigned_team: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    assigned_to: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="open",
+        index=True,
+    )
+
+    batch_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+class RecoveryEscalationNote(Base):
+    __tablename__ = "recovery_escalation_notes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    case_id: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+    )
+
+    note: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    created_by: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
     )

@@ -20,6 +20,7 @@ from app.db.normalized_models import NormalizedEvent
 from app.normalization.razorpay import normalize_razorpay_event
 from app.queue.redis import publish_recovery_event
 from app.state.history_service import sync_razorpay_history
+from app.state.batch_service import get_active_batch
 
 
 router = APIRouter(
@@ -115,6 +116,8 @@ async def razorpay_webhook(
         "unknown",
     )
 
+    active_batch = get_active_batch(db)
+
     # ==================================================
     # 5. Check for duplicate event
     # ==================================================
@@ -147,6 +150,7 @@ async def razorpay_webhook(
         event_id=event_id,
         event_type=event_type,
         payload=payload,
+        batch_id=(active_batch.batch_id if active_batch else None),
     )
 
     db.add(event)
@@ -196,6 +200,7 @@ async def razorpay_webhook(
         event_id=normalized.event_id,
         source=normalized.source,
         event_type=normalized.event_type,
+        batch_id=(active_batch.batch_id if active_batch else None),
 
         customer_id=(
             history.customer_id
@@ -211,6 +216,10 @@ async def razorpay_webhook(
             history.order_id
             or normalized.order_id
         ),
+
+        subscription_id=normalized.subscription_id,
+
+        invoice_id=normalized.invoice_id,
 
         amount=normalized.amount,
         currency=normalized.currency,
@@ -258,7 +267,9 @@ async def razorpay_webhook(
         f"event_type={event_type} "
         f"customer_id={history.customer_id} "
         f"payment_id={history.payment_id} "
-        f"order_id={history.order_id}"
+        f"order_id={history.order_id} "
+        f"subscription_id={normalized.subscription_id} "
+        f"invoice_id={normalized.invoice_id}"
     )
 
     print(
@@ -279,4 +290,6 @@ async def razorpay_webhook(
         "customer_id": history.customer_id,
         "payment_id": history.payment_id,
         "order_id": history.order_id,
+        "subscription_id": normalized.subscription_id,
+        "invoice_id": normalized.invoice_id,
     }

@@ -2,10 +2,13 @@ from app.utils.time import utc_now
 
 import os
 import socket
-from datetime import datetime
 from decimal import Decimal
+
 from app.db.models import Event
-from app.db.recovery_models import RecoveryAttempt
+from app.db.recovery_models import (
+    RecoveryAttempt,
+    RecoveryCase,
+)
 from app.db.database import SessionLocal
 from app.db.normalized_models import NormalizedEvent
 
@@ -21,14 +24,21 @@ from app.state.correlation import find_recovery_attempt
 from app.state.outcomes import (
     mark_recovery_succeeded,
     mark_recovery_failed,
+    record_invoice_partial_payment,
 )
 
 from app.state.attempts import create_recovery_attempt
+
+from app.state.case_service import get_or_create_recovery_case
+from app.state.escalation_service import create_support_escalation
+
 from app.state.context_service import build_recovery_context
 from app.state.service import create_recovery_decision
 from app.state.guardrail import validate_recovery_decision
 from app.state.executor import execute_recovery_attempt
-
+from app.state.stopping_rules import evaluate_stopping_rules
+from app.state.escalation import evaluate_escalation_rules
+from app.utils.time import utc_now
 
 CONSUMER_GROUP = "recovery-workers"
 
@@ -48,6 +58,14 @@ MAX_MESSAGE_RETRIES = 5
 RECOVERABLE_EVENTS = {
     "payment_failed",
     "payment.failed",
+    "subscription_pending",
+    "subscription.pending",
+    "subscription_halted",
+    "subscription.halted",
+    "invoice_expired",
+    "invoice.expired",
+    "invoice_partially_paid",
+    "invoice.partially_paid",
 }
 
 OUTCOME_EVENTS = {
@@ -57,6 +75,10 @@ OUTCOME_EVENTS = {
     "payment.authorized",
     "order_paid",
     "order.paid",
+    "subscription_charged",
+    "subscription.charged",
+    "invoice_paid",
+    "invoice.paid",
 }
 
 NON_RECOVERY_EVENTS = {
@@ -165,6 +187,8 @@ def process_captured_event(
         recovery_attempt_id=recovery_attempt_id,
         recovery_case_id=recovery_case_id,
         payment_id=normalized.payment_id,
+        subscription_id=normalized.subscription_id,
+        invoice_id=normalized.invoice_id,
         order_id=normalized.order_id,
         customer_id=normalized.customer_id,
     )
@@ -235,6 +259,8 @@ def process_failed_event(
     attempt = find_recovery_attempt(
         db,
         payment_id=normalized.payment_id,
+        subscription_id=normalized.subscription_id,
+        invoice_id=normalized.invoice_id,
         order_id=normalized.order_id,
         customer_id=normalized.customer_id,
     )
@@ -340,7 +366,26 @@ def process_event(event_id: str):
             return
 
         # --------------------------------------------------
-        # 3. Handle successful payment outcomes
+        # 3. Handle invoice partial-payment outcomes
+        # --------------------------------------------------
+        #
+        # A partial invoice payment is an outcome, but it
+        # must not close the recovery case. The handler
+        # records only the newly recovered amount.
+        #
+
+        if normalized.event_type in {
+            "invoice_partially_paid",
+            "invoice.partially_paid",
+        }:
+            record_invoice_partial_payment(
+                normalized=normalized,
+                db=db,
+            )
+            return
+
+        # --------------------------------------------------
+        # 4. Handle successful payment outcomes
         # --------------------------------------------------
 
         if normalized.event_type in OUTCOME_EVENTS:
@@ -351,7 +396,7 @@ def process_event(event_id: str):
             return
 
         # --------------------------------------------------
-        # 4. Only recoverable events enter the AI pipeline
+        # 5. Only recoverable events enter the AI pipeline
         # --------------------------------------------------
 
         if normalized.event_type not in RECOVERABLE_EVENTS:
@@ -364,17 +409,21 @@ def process_event(event_id: str):
             return
 
         # --------------------------------------------------
-        # 5. Resolve any prior active recovery attempt
+        # 6. Resolve any prior active recovery attempt
         #    for this payment (marks it as failed)
         # --------------------------------------------------
 
-        process_failed_event(
-            normalized=normalized,
-            db=db,
-        )
+        if normalized.event_type in {
+            "payment_failed",
+            "payment.failed",
+        }:
+            process_failed_event(
+                normalized=normalized,
+                db=db,
+            )
 
         # --------------------------------------------------
-        # 6. Build context from PostgreSQL
+        # 7. Build context from PostgreSQL
         # --------------------------------------------------
 
         context = build_recovery_context(
@@ -383,7 +432,259 @@ def process_event(event_id: str):
         )
 
         # --------------------------------------------------
-        # 7. Create / retrieve recovery decision
+        # 8. Case-level stopping rules
+        #
+        # These rules answer:
+        #
+        #     "Should this recovery CASE continue?"
+        #
+        # They run BEFORE Analyst / Strategist so we do not
+        # spend an AI decision on an already-resolved case.
+        #
+        # Action-level authorization remains the responsibility
+        # of the deterministic guardrail below.
+        # --------------------------------------------------
+
+        recovery_case = None
+
+        if context.case_id:
+            recovery_case = (
+                db.query(RecoveryCase)
+                .filter(
+                    RecoveryCase.case_id == context.case_id
+                )
+                .first()
+            )
+
+        stopping_decision = evaluate_stopping_rules(
+            case_status=(
+                recovery_case.status
+                if recovery_case is not None
+                else None
+            ),
+            attempt_count=(
+                recovery_case.current_attempt
+                if recovery_case is not None
+                else context.current_case_attempt
+            ),
+            amount_recovered=(
+                recovery_case.amount_recovered
+                if recovery_case is not None
+                else Decimal("0.00")
+            ),
+            amount_at_risk=(
+                recovery_case.amount_at_risk
+                if recovery_case is not None
+                else context.amount
+            ),
+            payment_status=context.payment_status,
+        )
+
+        print(
+            f"[WORKER] Stopping rules "
+            f"event={event_id} "
+            f"case_id={context.case_id} "
+            f"should_stop={stopping_decision.should_stop} "
+            f"reason={stopping_decision.reason}"
+        )
+
+        if stopping_decision.should_stop:
+            print(
+                f"[WORKER] Recovery case stopped "
+                f"event={event_id} "
+                f"case_id={context.case_id} "
+                f"reason={stopping_decision.reason}"
+            )
+            return
+
+        # --------------------------------------------------
+        # 9. Deterministic escalation rules
+        #
+        # These rules decide whether human support should
+        # take over the recovery case.
+        #
+        # Escalation is deterministic and happens BEFORE
+        # Analyst / Strategist so the AI cannot override
+        # the escalation policy.
+        # --------------------------------------------------
+
+        failed_attempts = 0
+
+        if context.case_id:
+            failed_attempts = (
+                db.query(RecoveryAttempt)
+                .filter(
+                    RecoveryAttempt.case_id == context.case_id,
+                    RecoveryAttempt.status == "failed",
+                )
+                .count()
+            )
+
+        escalation_decision = evaluate_escalation_rules(
+            case_status=(
+                recovery_case.status
+                if recovery_case is not None
+                else None
+            ),
+            attempt_count=(
+                recovery_case.current_attempt
+                if recovery_case is not None
+                else context.current_case_attempt
+            ),
+            amount_recovered=(
+                recovery_case.amount_recovered
+                if recovery_case is not None
+                else Decimal("0.00")
+            ),
+            amount_at_risk=(
+                recovery_case.amount_at_risk
+                if recovery_case is not None
+                else context.amount
+            ),
+            payment_status=context.payment_status,
+            failed_attempts=failed_attempts,
+            has_viable_recovery_path=True,
+        )
+
+        print(
+            f"[WORKER] Escalation rules "
+            f"event={event_id} "
+            f"case_id={context.case_id} "
+            f"should_escalate={escalation_decision.should_escalate} "
+            f"reason={escalation_decision.reason}"
+        )
+
+        if escalation_decision.should_escalate:
+
+            # --------------------------------------------------
+            # Ensure the recovery case exists.
+            # --------------------------------------------------
+
+            if recovery_case is None:
+                recovery_case = get_or_create_recovery_case(
+                    db,
+                    customer_id=context.customer_id,
+                    order_id=context.order_id,
+                    payment_id=context.payment_id,
+                    amount=context.amount,
+                    case_id=context.case_id,
+                    revenue_object_type=context.revenue_object_type,
+                    subscription_id=context.subscription_id,
+                    invoice_id=context.invoice_id,
+                    batch_id=getattr(context, "batch_id", None),
+                )
+
+            # --------------------------------------------------
+            # Never create another support escalation for an
+            # already escalated case.
+            # --------------------------------------------------
+
+            if recovery_case.status == "escalated":
+                print(
+                    f"[WORKER] Recovery case already escalated "
+                    f"event={event_id} "
+                    f"case_id={recovery_case.case_id}"
+                )
+                return
+
+            # --------------------------------------------------
+            # Build deterministic support decision.
+            #
+            # This does NOT come from Analyst / Strategist.
+            # --------------------------------------------------
+
+            escalation_decision_record = create_recovery_decision(
+                context=context,
+                db=db,
+                action="contact_support",
+                channel="none",
+                reason=(
+                    "Deterministic escalation policy triggered: "
+                    f"{escalation_decision.reason}."
+                ),
+            )
+
+            # --------------------------------------------------
+            # Guardrail still validates the escalation.
+            # --------------------------------------------------
+
+            approved, policy_reason = validate_recovery_decision(
+                context=context,
+                decision=escalation_decision_record,
+            )
+
+            print(
+                f"[WORKER] Escalation guardrail "
+                f"event={event_id} "
+                f"approved={approved} "
+                f"reason={policy_reason}"
+            )
+
+            if not approved:
+                print(
+                    f"[WORKER] Escalation rejected by guardrail "
+                    f"event={event_id} "
+                    f"reason={policy_reason}"
+                )
+                return
+
+            # --------------------------------------------------
+            # Create the audited support attempt.
+            # --------------------------------------------------
+
+            attempt = create_recovery_attempt(
+                context=context,
+                decision=escalation_decision_record,
+                db=db,
+            )
+
+            attempt.policy_result = "approved"
+            attempt.policy_reason = policy_reason
+
+            # --------------------------------------------------
+            # Case state changes only after the support attempt
+            # has been created.
+            # --------------------------------------------------
+            # Create the support escalation.
+            # --------------------------------------------------
+
+            escalation = create_support_escalation(
+                db=db,
+                case=recovery_case,
+                reason_code=escalation_decision.reason,
+            )
+
+            print(
+                f"[WORKER] Support escalation created "
+                f"event={event_id} "
+                f"case_id={recovery_case.case_id} "
+                f"escalation_id={escalation.id} "
+                f"team={escalation.assigned_team} "
+                f"priority={escalation.priority}"
+            )
+
+            # --------------------------------------------------
+            # Execute through the existing Executor Agent.
+            # --------------------------------------------------
+
+            attempt = execute_recovery_attempt(
+                attempt=attempt,
+                db=db,
+            )
+
+            print(
+                f"[WORKER] Recovery escalation complete "
+                f"event={event_id} "
+                f"case_id={recovery_case.case_id} "
+                f"attempt_id={attempt.id} "
+                f"status={attempt.status} "
+                f"reason={escalation_decision.reason}"
+            )
+
+            return
+
+        # --------------------------------------------------
+        # 10. Create / retrieve recovery decision
         # --------------------------------------------------
 
         decision = create_recovery_decision(
@@ -392,7 +693,7 @@ def process_event(event_id: str):
         )
 
         # --------------------------------------------------
-        # 8. Policy Guardrail
+        # 11. Policy Guardrail
         #
         # IMPORTANT:
         # Run the guardrail BEFORE creating a RecoveryAttempt.
@@ -424,12 +725,13 @@ def process_event(event_id: str):
             return
 
         # --------------------------------------------------
-        # 9. Create / retrieve recovery attempt
+        # 12. Create / retrieve recovery attempt
         # --------------------------------------------------
 
         # `no_action` is a decision, not a recovery attempt.
         # Do not create a RecoveryAttempt for it, otherwise it inflates
         # case.current_attempt and eventually distorts the attempt limit.
+
         attempt = None
         skip_execution = True
 
@@ -503,6 +805,19 @@ def process_event(event_id: str):
                 skip_execution = True
 
             else:
+                get_or_create_recovery_case(
+                    db,
+                    customer_id=context.customer_id,
+                    order_id=context.order_id,
+                    payment_id=context.payment_id,
+                    amount=context.amount,
+                    case_id=context.case_id,
+                    revenue_object_type=context.revenue_object_type,
+                    subscription_id=context.subscription_id,
+                    invoice_id=context.invoice_id,
+                    batch_id=getattr(context, "batch_id", None),
+                )
+
                 attempt = create_recovery_attempt(
                     context=context,
                     decision=decision,
@@ -512,19 +827,27 @@ def process_event(event_id: str):
                 skip_execution = False
 
         # --------------------------------------------------
-        # 10. Persist approved guardrail result
+        # 13. Persist approved guardrail result
         # --------------------------------------------------
 
         if attempt is not None:
             attempt.policy_result = "approved"
             attempt.policy_reason = policy_reason
 
+            if (
+                attempt.status == "proposed"
+                and attempt.scheduled_at is not None
+                and attempt.scheduled_at > utc_now()
+            ):
+                attempt.status = "approved"
+
             db.commit()
             db.refresh(attempt)
 
         # --------------------------------------------------
-        # 11. Execute approved recovery.
-        #     no_action intentionally has no attempt to execute.
+        # 14. Execute approved recovery.
+        #
+        # `no_action` intentionally has no attempt to execute.
         # --------------------------------------------------
 
         if (
@@ -532,13 +855,24 @@ def process_event(event_id: str):
             and attempt is not None
             and not skip_execution
         ):
-            attempt = execute_recovery_attempt(
-                attempt=attempt,
-                db=db,
-            )
+            if (
+                attempt.scheduled_at is not None
+                and attempt.scheduled_at > utc_now()
+            ):
+                print(
+                    f"[WORKER] Recovery attempt scheduled for later "
+                    f"event={event_id} "
+                    f"attempt_id={attempt.id} "
+                    f"scheduled_at={attempt.scheduled_at}"
+                )
+            else:
+                attempt = execute_recovery_attempt(
+                    attempt=attempt,
+                    db=db,
+                )
 
         # --------------------------------------------------
-        # 12. Log successful processing
+        # 15. Log successful processing
         # --------------------------------------------------
 
         print(
@@ -699,7 +1033,7 @@ def handle_event(
 
         try:
             info = _get_message_delivery_count(
-                message_id,
+                message_id
             )
 
             if info >= MAX_MESSAGE_RETRIES:

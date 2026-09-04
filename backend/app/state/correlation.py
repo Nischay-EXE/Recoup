@@ -27,20 +27,24 @@ def find_recovery_attempt(
     db: Session,
     *,
     payment_id: str | None = None,
+    subscription_id: str | None = None,
+    invoice_id: str | None = None,
     order_id: str | None = None,
     customer_id: str | None = None,
     recovery_attempt_id: int | str | None = None,
     recovery_case_id: str | None = None,
 ) -> RecoveryAttempt | None:
     """
-    Find the recovery attempt associated with an incoming payment event.
+    Find the recovery attempt associated with an incoming revenue event.
 
     Correlation priority:
     1. Exact recovery_attempt_id
     2. Exact recovery_case_id when it identifies one attempt
     3. Exact payment_id
-    4. Exact order_id
-    5. customer_id only when there is exactly one active attempt
+    4. Exact subscription_id
+    5. Exact invoice_id
+    6. Exact order_id
+    7. customer_id only when there is exactly one active attempt
 
     Returns None when the relationship is ambiguous.
     """
@@ -133,7 +137,67 @@ def find_recovery_attempt(
             return attempt
 
     # --------------------------------------------------
-    # 4. Exact order match
+    # 4. Exact subscription match
+    # --------------------------------------------------
+
+    if subscription_id:
+        attempts = (
+            db.query(RecoveryAttempt)
+            .filter(
+                RecoveryAttempt.subscription_id == subscription_id,
+                RecoveryAttempt.status.in_(
+                    CORRELATABLE_RECOVERY_STATUSES
+                ),
+            )
+            .order_by(
+                RecoveryAttempt.attempt_number.desc()
+            )
+            .all()
+        )
+
+        # A subscription can have multiple recovery attempts.
+        # Do not guess which attempt an outcome belongs to.
+        if len(attempts) == 1:
+            return attempts[0]
+
+        # If there are multiple candidates, prefer the active
+        # attempt only when exactly one active attempt exists.
+        active_attempts = [
+            attempt
+            for attempt in attempts
+            if attempt.status in ACTIVE_RECOVERY_STATUSES
+        ]
+
+        if len(active_attempts) == 1:
+            return active_attempts[0]
+
+        # Multiple candidates = ambiguous.
+        return None
+
+    # --------------------------------------------------
+    # 5. Exact invoice match
+    # --------------------------------------------------
+
+    if invoice_id:
+        attempt = (
+            db.query(RecoveryAttempt)
+            .filter(
+                RecoveryAttempt.invoice_id == invoice_id,
+                RecoveryAttempt.status.in_(
+                    CORRELATABLE_RECOVERY_STATUSES
+                ),
+            )
+            .order_by(
+                RecoveryAttempt.attempt_number.desc()
+            )
+            .first()
+        )
+
+        if attempt:
+            return attempt
+
+    # --------------------------------------------------
+    # 6. Exact order match
     # --------------------------------------------------
 
     if order_id:
@@ -155,7 +219,7 @@ def find_recovery_attempt(
             return attempt
 
     # --------------------------------------------------
-    # 5. Customer fallback
+    # 7. Customer fallback
     # --------------------------------------------------
 
     if customer_id:

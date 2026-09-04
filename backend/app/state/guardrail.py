@@ -128,7 +128,8 @@ def validate_recovery_decision(
         )
 
     # --------------------------------------------------
-    # 8. Only recover failed payments
+    # 8. Block recovery when the revenue object is already
+    #    successfully resolved.
     # --------------------------------------------------
 
     if context.payment_status in {
@@ -138,17 +139,26 @@ def validate_recovery_decision(
     }:
         return (
             False,
-            "Payment is already successful. Recovery action blocked.",
+            "Revenue object is already successful. Recovery action blocked.",
         )
 
     # --------------------------------------------------
-    # 9. Only payment_failed events are recoverable
+    # 9. Only recover explicitly recoverable revenue events
     # --------------------------------------------------
 
-    if context.event_type != "payment_failed":
+    recoverable_event_types = {
+        "payment_failed",
+        "subscription_pending",
+        "subscription_halted",
+        "invoice_expired",
+        "invoice_partially_paid",
+    }
+
+    if context.event_type not in recoverable_event_types:
         return (
             False,
-            "Event is not a payment failure. Recovery action blocked.",
+            "Event is not a recoverable revenue event. "
+            "Recovery action blocked.",
         )
 
     return True, "Decision approved for execution."

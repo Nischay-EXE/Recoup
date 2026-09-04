@@ -14,6 +14,8 @@ def get_recovery_case(
     case_id: str | None = None,
     order_id: str | None = None,
     payment_id: str | None = None,
+    subscription_id: str | None = None,
+    invoice_id: str | None = None,
 ) -> RecoveryCase | None:
     """
     Find an existing recovery case.
@@ -29,6 +31,32 @@ def get_recovery_case(
         case = (
             db.query(RecoveryCase)
             .filter(RecoveryCase.case_id == case_id)
+            .first()
+        )
+
+        if case:
+            return case
+
+    if subscription_id:
+        case = (
+            db.query(RecoveryCase)
+            .filter(
+                RecoveryCase.subscription_id == subscription_id,
+                RecoveryCase.status == "open",
+            )
+            .first()
+        )
+
+        if case:
+            return case
+
+    if invoice_id:
+        case = (
+            db.query(RecoveryCase)
+            .filter(
+                RecoveryCase.invoice_id == invoice_id,
+                RecoveryCase.status == "open",
+            )
             .first()
         )
 
@@ -81,6 +109,10 @@ def create_recovery_case(
     order_id: str | None,
     payment_id: str | None,
     amount: Decimal | None,
+    revenue_object_type: str = "payment",
+    subscription_id: str | None = None,
+    invoice_id: str | None = None,
+    batch_id: str | None = None,
 ) -> RecoveryCase:
     """
     Create a recovery case for an initial payment failure.
@@ -97,6 +129,10 @@ def create_recovery_case(
         status="open",
         current_attempt=0,
         created_at=utc_now(),
+        revenue_object_type=revenue_object_type,
+        subscription_id=subscription_id,
+        invoice_id=invoice_id,
+        batch_id=batch_id,
     )
 
     db.add(case)
@@ -114,6 +150,10 @@ def get_or_create_recovery_case(
     payment_id: str | None,
     amount: Decimal | None,
     case_id: str | None = None,
+    revenue_object_type: str = "payment",
+    subscription_id: str | None = None,
+    invoice_id: str | None = None,
+    batch_id: str | None = None,
 ) -> RecoveryCase:
 
     existing_case = get_recovery_case(
@@ -121,6 +161,8 @@ def get_or_create_recovery_case(
         case_id=case_id,
         order_id=order_id,
         payment_id=payment_id,
+        subscription_id=subscription_id,
+        invoice_id=invoice_id,
     )
 
     if existing_case:
@@ -132,6 +174,10 @@ def get_or_create_recovery_case(
         order_id=order_id,
         payment_id=payment_id,
         amount=amount,
+        revenue_object_type=revenue_object_type,
+        subscription_id=subscription_id,
+        invoice_id=invoice_id,
+        batch_id=batch_id,
     )
 
 
@@ -175,7 +221,7 @@ def mark_case_recovered(
     db: Session,
     case: RecoveryCase,
     *,
-    payment_id: str,
+    payment_id: str | None,
     amount_recovered: Decimal,
 ) -> RecoveryCase:
     """
@@ -186,6 +232,31 @@ def mark_case_recovered(
     case.amount_recovered = amount_recovered
     case.status = "recovered"
     case.resolved_at = utc_now()
+
+    db.commit()
+    db.refresh(case)
+
+    return case
+
+def mark_case_escalated(
+    db: Session,
+    case: RecoveryCase,
+) -> RecoveryCase:
+    """
+    Mark the recovery case as escalated to human support.
+    """
+
+    if case.status == "escalated":
+        return case
+
+    if case.status in {
+        "recovered",
+        "resolved",
+        "closed",
+    }:
+        return case
+
+    case.status = "escalated"
 
     db.commit()
     db.refresh(case)

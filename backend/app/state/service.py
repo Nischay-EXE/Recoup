@@ -48,6 +48,10 @@ def build_customer_message(action: str) -> str:
 def create_recovery_decision(
     context: RecoveryContext,
     db: Session,
+    *,
+    action: str | None = None,
+    channel: str | None = None,
+    reason: str | None = None,
 ) -> RecoveryDecisionRecord:
 
     # --------------------------------------------------
@@ -66,13 +70,50 @@ def create_recovery_decision(
         return existing_decision
 
     # --------------------------------------------------
-    # 2. Agent 1 — Recovery Analyst
+    # 2. Deterministic decision override
+    #
+    # Used for system-level decisions such as escalation.
+    # This path intentionally bypasses Analyst / Strategist.
+    # --------------------------------------------------
+
+    if action is not None:
+        if channel is None:
+            raise ValueError(
+                "channel is required when action is provided."
+            )
+
+        if reason is None:
+            raise ValueError(
+                "reason is required when action is provided."
+            )
+
+        message = build_customer_message(action)
+
+        record = RecoveryDecisionRecord(
+            event_id=context.event_id,
+            batch_id=context.batch_id,
+            action=action,
+            channel=channel,
+            reason=reason,
+            message=message,
+            confidence=1.0,
+            priority="high",
+        )
+
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+
+        return record
+
+    # --------------------------------------------------
+    # 3. Agent 1 — Recovery Analyst
     # --------------------------------------------------
 
     analyst_report = analyze_recovery_context(context)
 
     # --------------------------------------------------
-    # 3. Agent 2 — Recovery Strategist
+    # 4. Agent 2 — Recovery Strategist
     # --------------------------------------------------
 
     strategy = propose_strategy(
@@ -81,7 +122,7 @@ def create_recovery_decision(
     )
 
     # --------------------------------------------------
-    # 4. Build customer-facing message
+    # 5. Build customer-facing message
     # --------------------------------------------------
 
     message = build_customer_message(
@@ -89,11 +130,12 @@ def create_recovery_decision(
     )
 
     # --------------------------------------------------
-    # 5. Persist final decision
+    # 6. Persist final decision
     # --------------------------------------------------
 
     record = RecoveryDecisionRecord(
         event_id=context.event_id,
+        batch_id=context.batch_id,
         action=strategy.action,
         channel=strategy.channel,
         reason=strategy.reason,

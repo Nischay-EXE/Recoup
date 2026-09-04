@@ -186,6 +186,10 @@ def build_recovery_context(
     if normalized.event_type in {
         "payment_failed",
         "payment.failed",
+        "subscription_pending",
+        "subscription.pending",
+        "subscription_halted",
+        "subscription.halted",
     }:
         # A Razorpay Payment Link creates a new order/payment when the
         # customer retries through the link. The payment payload preserves
@@ -203,13 +207,22 @@ def build_recovery_context(
         )
 
         case = get_or_create_recovery_case(
-            db,
-            customer_id=customer_id,
-            order_id=normalized.order_id,
-            payment_id=normalized.payment_id,
-            amount=normalized.amount,
-            case_id=recovery_case_id,
-        )
+        db,
+        customer_id=normalized.customer_id,
+        order_id=normalized.order_id,
+        payment_id=normalized.payment_id,
+        amount=normalized.amount,
+        case_id=recovery_case_id,
+        revenue_object_type=(
+            "subscription"
+            if normalized.subscription_id
+            else "invoice"
+            if normalized.invoice_id
+            else "payment"
+        ),
+        subscription_id=normalized.subscription_id,
+        invoice_id=normalized.invoice_id,
+    )
 
         # Keep the case's current payment pointed at the newest payment
         # while preserving the original payment ID.
@@ -285,15 +298,26 @@ def build_recovery_context(
         # Current event
         event_id=normalized.event_id,
         event_type=normalized.event_type,
+        batch_id=normalized.batch_id,
 
         case_id=(case.case_id if case is not None else None),
         current_case_attempt=(
             case.current_attempt if case is not None else 0
         ),
 
-        # Current payment
+        # Revenue object
+        revenue_object_type=(
+            "subscription"
+            if normalized.subscription_id
+            else "invoice"
+            if normalized.invoice_id
+            else "payment"
+        ),
+
         payment_id=normalized.payment_id,
         order_id=normalized.order_id,
+        subscription_id=normalized.subscription_id,
+        invoice_id=normalized.invoice_id,
 
         amount=normalized.amount,
         currency=normalized.currency,

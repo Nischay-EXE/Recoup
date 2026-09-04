@@ -1,5 +1,4 @@
 import json
-
 import os
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -9,10 +8,13 @@ from dotenv import load_dotenv
 from strands import Agent
 from strands.models.openai import OpenAIModel
 from strands.tools.decorator import tool
+
 from app.clients.razorpay import RazorpayClient
 from app.config import settings
 from app.db.history_models import Customer, Order, Payment
 from app.db.recovery_models import RecoveryAttempt, RecoveryDecisionRecord
+from app.mcp.razorpay import RazorpayMCPClient, RazorpayMCPError
+
 
 # --------------------------------------------------
 # Environment
@@ -105,6 +107,17 @@ def _razorpay() -> RazorpayClient:
         key_id=settings.razorpay_key_id,
         key_secret=settings.razorpay_key_secret,
     )
+
+
+def _razorpay_mcp() -> RazorpayMCPClient:
+    """
+    Create and connect to the Razorpay Remote MCP capability boundary.
+
+    RazorpayMCPClient owns credential configuration through settings.
+    """
+    client = RazorpayMCPClient()
+    client.connect()
+    return client
 
 
 def _get_customer(
@@ -206,6 +219,100 @@ def _reference(attempt_id: int) -> str:
 
 
 # --------------------------------------------------
+# MCP response helpers
+# --------------------------------------------------
+
+
+def _parse_mcp_result(result) -> dict:
+    """
+    Convert the Razorpay MCP response envelope into its JSON payload.
+
+    Example MCP response:
+
+        {
+            "status": "success",
+            "toolUseId": "...",
+            "content": [
+                {
+                    "text": "{\"payment_links\":[]}"
+                }
+            ],
+            "isError": false
+        }
+    """
+
+    if not isinstance(result, dict):
+        raise RazorpayMCPError(
+            "Unexpected MCP response type: "
+            f"{type(result).__name__}"
+        )
+
+    if result.get("status") != "success" or result.get("isError"):
+        raise RazorpayMCPError(
+            f"MCP tool execution failed: {result!r}"
+        )
+
+    content = result.get("content")
+
+    if not isinstance(content, list):
+        raise RazorpayMCPError(
+            "MCP response does not contain a valid content list."
+        )
+
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+
+        text = item.get("text")
+
+        if not isinstance(text, str):
+            continue
+
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise RazorpayMCPError(
+                "MCP response content is not valid JSON."
+            ) from exc
+
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise RazorpayMCPError(
+        "MCP response did not contain a JSON object."
+    )
+
+
+def _extract_mcp_payment_link(result) -> dict | None:
+    """
+    Extract one Payment Link object from a parsed Razorpay MCP response.
+    """
+
+    if not isinstance(result, dict):
+        return None
+
+    if result.get("id"):
+        return result
+
+    for key in (
+        "payment_links",
+        "items",
+        "data",
+    ):
+        value = result.get(key)
+
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict) and item.get("id"):
+                    return item
+
+        elif isinstance(value, dict) and value.get("id"):
+            return value
+
+    return None
+
+
+# --------------------------------------------------
 # Real execution primitives
 # --------------------------------------------------
 
@@ -218,13 +325,72 @@ def _create_or_reuse_payment_link(
 ) -> ExecutionResult:
     currency = _get_currency(attempt, db)
     reference_id = _reference(attempt.id)
-    client = _razorpay()
 
-    # Idempotency / crash recovery:
-    # If Razorpay already has a link for this attempt reference, reuse it.
-    existing = client.find_payment_link_by_reference(
-        reference_id
-    )
+    # --------------------------------------------------
+    # 1. Check for an existing Payment Link through MCP.
+    # --------------------------------------------------
+
+    existing = None
+    mcp_client = None
+
+    try:
+        mcp_client = _razorpay_mcp()
+
+        lookup_result = mcp_client.call_tool(
+            "fetch_all_payment_links",
+            {
+                "reference_id": reference_id,
+            },
+        )
+
+        lookup_data = _parse_mcp_result(
+            lookup_result
+        )
+
+        existing = _extract_mcp_payment_link(
+            lookup_data
+        )
+
+        if existing is not None:
+            payment_link_id = existing.get("id")
+            short_url = existing.get("short_url")
+
+            print(
+                "[EXECUTOR TOOL] Reusing existing Razorpay Payment Link "
+                "via MCP "
+                f"attempt_id={attempt.id} "
+                f"payment_link_id={payment_link_id}"
+            )
+
+            return ExecutionResult(
+                success=True,
+                status="sent",
+                action=attempt.action,
+                channel=attempt.channel,
+                provider="razorpay_mcp",
+                external_id=payment_link_id,
+                external_url=short_url,
+                message=decision.message,
+            )
+
+    except RazorpayMCPError as exc:
+        print(
+            "[EXECUTOR TOOL] Razorpay MCP lookup unavailable; "
+            f"falling back to REST: {exc}"
+        )
+
+    finally:
+        if mcp_client is not None:
+            mcp_client.disconnect()
+
+    # --------------------------------------------------
+    # 2. Safe REST fallback for read-only lookup.
+    # --------------------------------------------------
+
+    if existing is None:
+        existing = _razorpay().find_payment_link_by_reference(
+            reference_id
+        )
 
     if existing is not None:
         payment_link_id = existing.get("id")
@@ -232,6 +398,7 @@ def _create_or_reuse_payment_link(
 
         print(
             "[EXECUTOR TOOL] Reusing existing Razorpay Payment Link "
+            f"via REST "
             f"attempt_id={attempt.id} "
             f"payment_link_id={payment_link_id}"
         )
@@ -246,6 +413,10 @@ def _create_or_reuse_payment_link(
             external_url=short_url,
             message=decision.message,
         )
+
+    # --------------------------------------------------
+    # 3. Validate the approved communication channel.
+    # --------------------------------------------------
 
     if attempt.channel == "email":
         if not customer.email:
@@ -272,6 +443,10 @@ def _create_or_reuse_payment_link(
             f"Received channel={attempt.channel}."
         )
 
+    # --------------------------------------------------
+    # 4. Validate amount.
+    # --------------------------------------------------
+
     if attempt.amount_at_risk is None:
         raise ValueError(
             "Recovery attempt amount_at_risk is missing."
@@ -282,6 +457,10 @@ def _create_or_reuse_payment_link(
         currency,
     )
 
+    # --------------------------------------------------
+    # 5. Build provider metadata.
+    # --------------------------------------------------
+
     notes = {
         "source": "revenue_recovery_agent",
         "recovery_attempt_id": str(attempt.id),
@@ -291,6 +470,7 @@ def _create_or_reuse_payment_link(
 
     print(
         "[EXECUTOR TOOL] Creating Razorpay Payment Link "
+        "via MCP "
         f"attempt_id={attempt.id} "
         f"amount={attempt.amount_at_risk} "
         f"currency={currency} "
@@ -298,32 +478,82 @@ def _create_or_reuse_payment_link(
         f"reference_id={reference_id}"
     )
 
-    link = client.create_payment_link(
-        amount_minor=amount_minor,
-        currency=currency,
-        customer_name=customer.name,
-        customer_email=customer.email,
-        customer_contact=customer.phone,
-        reference_id=reference_id,
-        description=(
-            "Payment recovery for attempt "
-            f"{attempt.id}"
-        ),
-        notes=notes,
-        notify_email=notify_email,
-        notify_sms=notify_sms,
-    )
+    # --------------------------------------------------
+    # 6. Create through Razorpay MCP.
+    #
+    # Do NOT automatically fall back to REST here.
+    # If MCP has reached Razorpay and execution fails,
+    # blindly retrying through REST could create a duplicate.
+    # --------------------------------------------------
 
-    return ExecutionResult(
-        success=True,
-        status="sent",
-        action=attempt.action,
-        channel=attempt.channel,
-        provider="razorpay",
-        external_id=link.get("id"),
-        external_url=link.get("short_url"),
-        message=decision.message,
-    )
+    mcp_client = None
+
+    try:
+        mcp_client = _razorpay_mcp()
+
+        result = mcp_client.call_tool(
+            "create_payment_link",
+            {
+                "amount": amount_minor,
+                "currency": currency,
+                "customer_name": customer.name,
+                "customer_email": customer.email,
+                "customer_contact": customer.phone,
+                "reference_id": reference_id,
+                "description": (
+                    "Payment recovery for attempt "
+                    f"{attempt.id}"
+                ),
+                "notes": notes,
+                "notify_email": notify_email,
+                "notify_sms": notify_sms,
+                "reminder_enable": False,
+            },
+        )
+
+        data = _parse_mcp_result(
+            result
+        )
+
+        link = _extract_mcp_payment_link(
+            data
+        )
+
+        if link is None:
+            raise RazorpayMCPError(
+                "Razorpay MCP create_payment_link returned "
+                "no Payment Link object."
+            )
+
+        print(
+            "[EXECUTOR TOOL] Created Razorpay Payment Link "
+            "via MCP "
+            f"attempt_id={attempt.id} "
+            f"payment_link_id={link.get('id')}"
+        )
+
+        return ExecutionResult(
+            success=True,
+            status="sent",
+            action=attempt.action,
+            channel=attempt.channel,
+            provider="razorpay_mcp",
+            external_id=link.get("id"),
+            external_url=link.get("short_url"),
+            message=decision.message,
+        )
+
+    except RazorpayMCPError as exc:
+        raise RuntimeError(
+            "Razorpay MCP payment-link creation failed: "
+            f"{type(exc).__name__}: {exc}. "
+            "REST fallback is intentionally disabled after MCP "
+            "execution begins to avoid duplicate payment links."
+        ) from exc
+
+    finally:
+        if mcp_client is not None:
+            mcp_client.disconnect()
 
 
 def _find_previous_payment_link(
@@ -339,10 +569,16 @@ def _find_previous_payment_link(
             RecoveryAttempt.case_id == attempt.case_id,
             RecoveryAttempt.id != attempt.id,
             RecoveryAttempt.action.in_(
-                {"send_payment_link", "retry_payment"}
+                {
+                    "send_payment_link",
+                    "retry_payment",
+                }
             ),
             RecoveryAttempt.status.in_(
-                {"sent", "succeeded"}
+                {
+                    "sent",
+                    "succeeded",
+                }
             ),
         )
         .order_by(
@@ -354,8 +590,51 @@ def _find_previous_payment_link(
     if previous is None:
         return None
 
+    reference_id = _reference(previous.id)
+
+    # --------------------------------------------------
+    # Prefer MCP for read-only Payment Link lookup.
+    # --------------------------------------------------
+
+    mcp_client = None
+
+    try:
+        mcp_client = _razorpay_mcp()
+
+        result = mcp_client.call_tool(
+            "fetch_all_payment_links",
+            {
+                "reference_id": reference_id,
+            },
+        )
+
+        data = _parse_mcp_result(
+            result
+        )
+
+        link = _extract_mcp_payment_link(
+            data
+        )
+
+        if link is not None:
+            return link
+
+    except RazorpayMCPError as exc:
+        print(
+            "[EXECUTOR TOOL] Razorpay MCP reminder lookup unavailable; "
+            f"falling back to REST: {exc}"
+        )
+
+    finally:
+        if mcp_client is not None:
+            mcp_client.disconnect()
+
+    # --------------------------------------------------
+    # Safe REST fallback for read-only lookup.
+    # --------------------------------------------------
+
     return _razorpay().find_payment_link_by_reference(
-        _reference(previous.id)
+        reference_id
     )
 
 
@@ -390,27 +669,60 @@ def _execute_reminder(
             "Previous Payment Link has no Razorpay id."
         )
 
-    response = _razorpay().notify_payment_link(
-        payment_link_id=payment_link_id,
-        medium=attempt.channel,
+    print(
+        "[EXECUTOR TOOL] Sending Razorpay Payment Link reminder "
+        "via MCP "
+        f"attempt_id={attempt.id} "
+        f"payment_link_id={payment_link_id} "
+        f"medium={attempt.channel}"
     )
 
-    # Razorpay's notify endpoint can return an empty/object response on success.
-    if response is None:
-        raise ValueError(
-            "Razorpay reminder notification returned no response."
+    # --------------------------------------------------
+    # Use MCP for the actual notification.
+    #
+    # Do NOT automatically fall back to REST after MCP
+    # execution begins because the notification may already
+    # have been delivered.
+    # --------------------------------------------------
+
+    mcp_client = None
+
+    try:
+        mcp_client = _razorpay_mcp()
+
+        result = mcp_client.call_tool(
+            "payment_link_notify",
+            {
+                "payment_link_id": payment_link_id,
+                "medium": attempt.channel,
+            },
         )
 
-    return ExecutionResult(
-        success=True,
-        status="sent",
-        action=attempt.action,
-        channel=attempt.channel,
-        provider="razorpay",
-        external_id=payment_link_id,
-        external_url=link.get("short_url"),
-        message=decision.message,
-    )
+        data = _parse_mcp_result(
+            result
+        )
+
+        return ExecutionResult(
+            success=True,
+            status="sent",
+            action=attempt.action,
+            channel=attempt.channel,
+            provider="razorpay_mcp",
+            external_id=payment_link_id,
+            external_url=link.get("short_url"),
+            message=decision.message,
+        )
+
+    except RazorpayMCPError as exc:
+        raise RuntimeError(
+            "Razorpay MCP payment-link notification failed. "
+            "REST fallback is intentionally disabled after MCP "
+            "execution begins to avoid duplicate notifications."
+        ) from exc
+
+    finally:
+        if mcp_client is not None:
+            mcp_client.disconnect()
 
 
 def _execute_support(
@@ -462,6 +774,9 @@ def _make_tool(
     name: str,
     description: str,
     handler: Callable[[], ExecutionResult],
+    *,
+    action: str,
+    channel: str,
 ):
     """
     Create a Strands-compatible zero-argument tool.
@@ -474,7 +789,36 @@ def _make_tool(
         description=description,
     )
     def tool_function() -> str:
-        result = handler()
+        try:
+            result = handler()
+
+        except Exception as exc:
+            # The tool WAS invoked, but the external execution failed.
+            # Preserve that distinction so execute_strategy() does not
+            # misreport a provider failure as "tool not invoked".
+            result = ExecutionResult(
+                success=False,
+                status="execution_failed",
+                action=action,
+                channel=channel,
+                provider=(
+                    "razorpay_mcp"
+                    if name.startswith("send_payment_link")
+                    or name.startswith("send_payment_link_reminder")
+                    else "executor_tool"
+                ),
+                error=(
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            )
+
+            print(
+                "[EXECUTOR TOOL] Tool execution failed "
+                f"tool={name} "
+                f"action={action} "
+                f"channel={channel} "
+                f"error={result.error}"
+            )
 
         execution_state["result"] = result
 
@@ -491,8 +835,10 @@ def _make_tool(
         )
 
     return tool_function
-# This mutable state is deliberately scoped to one execute_strategy() call and
-# replaced before every Agent invocation.
+
+
+# This mutable state is deliberately scoped to one execute_strategy() call
+# and replaced before every Agent invocation.
 execution_state: dict[str, ExecutionResult | None] = {
     "result": None,
 }
@@ -601,6 +947,8 @@ def execute_strategy(
         tools = [
             _make_tool(
                 name="no_action",
+                action=action,
+                channel=channel,
                 description=(
                     "Record that no recovery action should be taken. "
                     "Call exactly once."
@@ -621,6 +969,8 @@ def execute_strategy(
         tools = [
             _make_tool(
                 name="contact_support",
+                action=action,
+                channel=channel,
                 description=(
                     "Create an internal support escalation for this recovery "
                     "attempt. Call exactly once."
@@ -660,6 +1010,8 @@ def execute_strategy(
                     "recovery attempt and notify the customer through the "
                     f"approved {channel} channel. Call exactly once."
                 ),
+                action=action,
+                channel=channel,
                 handler=lambda: _create_or_reuse_payment_link(
                     attempt,
                     decision,
@@ -687,6 +1039,8 @@ def execute_strategy(
                     "Send a reminder for the existing Razorpay recovery "
                     "Payment Link through the approved channel. Call exactly once."
                 ),
+                action=action,
+                channel=channel,
                 handler=lambda: _execute_reminder(
                     attempt,
                     decision,
@@ -701,34 +1055,33 @@ def execute_strategy(
             f"channel={channel}"
         )
 
-    context_json = json.dumps(
-        context.model_dump(mode="json"),
-        indent=2,
-    )
-
     decision_data = {
-    "action": decision.action,
-    "channel": decision.channel,
-    "reason": decision.reason,
-    "message": decision.message,
-    "confidence": float(decision.confidence),
-    "priority": decision.priority,
-    }   
+        "attempt_id": attempt.id,
+        "case_id": attempt.case_id,
+        "decision_id": decision.id,
+        "action": decision.action,
+        "channel": decision.channel,
+        "reason": decision.reason,
+        "message": decision.message,
+        "confidence": float(decision.confidence),
+        "priority": decision.priority,
+    }
 
     prompt = f"""
 Execute the already approved recovery decision below.
 
-RECOVERY CONTEXT:
-{context_json}
+APPROVED EXECUTION:
+{json.dumps(decision_data, separators=(",", ":"))}
 
-APPROVED DECISION:
-{json.dumps(decision_data, indent=2)}
-
-EXECUTION RULE:
-Call the single provided tool exactly once.
-Do not change action or channel.
-Do not invent any data.
-Do not call another tool.
+EXECUTION RULES:
+- Call the single provided tool exactly once.
+- The provided tool is the ONLY permitted execution capability.
+- Do not change the action.
+- Do not change the channel.
+- Do not invent customer data.
+- Do not invent external IDs or payment links.
+- Do not call another tool.
+- Report the tool result concisely.
 """
 
     executor = build_recovery_executor(tools)
@@ -738,7 +1091,7 @@ Do not call another tool.
 
     if result is None:
         raise RuntimeError(
-            "Executor Agent returned without invoking its execution tool."
+            "Executor Agent did not invoke the required execution tool."
         )
 
     if not result.success:

@@ -12,7 +12,12 @@ def test_process_event_rejects_before_creating_attempt():
         event_type="payment.failed",
     )
 
-    context = SimpleNamespace()
+    context = SimpleNamespace(
+        case_id=None,
+        current_case_attempt=0,
+        amount=None,
+        payment_status=None,
+    )
 
     decision = SimpleNamespace(
         action="send_payment_link",

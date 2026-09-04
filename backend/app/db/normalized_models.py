@@ -49,7 +49,28 @@ class NormalizedEvent(Base):
         nullable=True,
     )
 
+    subscription_id: Mapped[str | None] = mapped_column(
+        String(255),
+        index=True,
+        nullable=True,
+    )
+
+    invoice_id: Mapped[str | None] = mapped_column(
+        String(255),
+        index=True,
+        nullable=True,
+    )
+
     amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2),
+        nullable=True,
+    )
+    amount_paid: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2),
+        nullable=True,
+    )
+
+    amount_due: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2),
         nullable=True,
     )
@@ -67,6 +88,10 @@ class NormalizedEvent(Base):
     occurred_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True,
+    )
+
+    batch_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
     )
 
     received_at: Mapped[datetime | None] = mapped_column(

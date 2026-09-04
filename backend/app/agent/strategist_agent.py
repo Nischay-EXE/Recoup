@@ -172,26 +172,103 @@ def propose_strategy(
     analyst_report: AnalystReport,
 ) -> AgentDecision:
     """
-    Generate a structured recovery strategy using the
-    RecoveryContext, AnalystReport, and currently available
-    execution capabilities.
+    Generate a structured recovery strategy using a compact,
+    decision-relevant view of the RecoveryContext.
+
+    The full RecoveryContext remains intact for audit/history.
+    Only the LLM input is intentionally bounded.
     """
 
+    compact_context = {
+        "event": {
+            "event_id": context.event_id,
+            "event_type": context.event_type,
+            "revenue_object_type": getattr(
+                context,
+                "revenue_object_type",
+                None,
+            ),
+        },
+        "case": {
+            "case_id": getattr(
+                context,
+                "case_id",
+                None,
+            ),
+            "current_case_attempt": getattr(
+                context,
+                "current_case_attempt",
+                0,
+            ),
+        },
+        "payment": {
+            "payment_id": context.payment_id,
+            "order_id": context.order_id,
+            "amount": (
+                str(context.amount)
+                if context.amount is not None
+                else None
+            ),
+            "currency": context.currency,
+            "status": context.payment_status,
+            "failure_reason": getattr(
+                context,
+                "payment_failure_reason",
+                None,
+            ),
+        },
+        "customer": {
+            "customer_id": context.customer_id,
+            "total_payments": context.customer_total_payments,
+            "successful_payments": context.customer_successful_payments,
+            "failed_payments": context.customer_failed_payments,
+        },
+        "recovery": {
+            "previous_attempts": context.previous_attempts,
+            "amount_at_risk": getattr(
+                context,
+                "amount_at_risk",
+                None,
+            ),
+            "amount_recovered": getattr(
+                context,
+                "amount_recovered",
+                None,
+            ),
+        },
+        "previous_recovery_attempts": [
+            {
+                "attempt_number": item.get("attempt_number"),
+                "action": item.get("action"),
+                "channel": item.get("channel"),
+                "status": item.get("status"),
+                "executed_at": item.get("executed_at"),
+                "amount_recovered": item.get(
+                    "amount_recovered"
+                ),
+            }
+            for item in (
+                context.previous_recovery_attempts or []
+            )[-5:]
+        ],
+        "merchant_policy": context.merchant_policy or {},
+    }
+
     context_json = json.dumps(
-        context.model_dump(mode="json"),
-        indent=2,
+        compact_context,
+        separators=(",", ":"),
     )
 
     analyst_json = json.dumps(
         analyst_report.model_dump(mode="json"),
-        indent=2,
+        separators=(",", ":"),
     )
 
     capabilities = get_execution_capabilities()
 
     capabilities_json = json.dumps(
         capabilities,
-        indent=2,
+        separators=(",", ":"),
     )
 
     prompt = f"""
@@ -223,13 +300,16 @@ The decision must contain:
 - confidence
 - priority
 
-The selected action and channel must be compatible with the available
-execution capabilities.
-
-Do not execute anything.
-Do not create a customer-facing message.
-Do not add additional fields.
-Do not repeat the full analysis.
+Rules:
+- Use only the verified information provided.
+- Choose exactly one action.
+- Choose exactly one channel.
+- Do not execute anything.
+- Do not create a customer-facing message.
+- Do not add additional fields.
+- Keep the reason concise.
+- The selected action and channel must be compatible with the
+  available execution capabilities.
 """
 
     strategist = build_recovery_strategist()

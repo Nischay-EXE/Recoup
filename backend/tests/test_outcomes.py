@@ -15,6 +15,8 @@ def test_mark_recovery_succeeded_updates_attempt_and_case():
         amount_at_risk=Decimal("500.00"),
         amount_recovered=None,
         resolved_at=None,
+        subscription_id=None,
+        invoice_id=None,
     )
 
     case = SimpleNamespace(
@@ -48,6 +50,8 @@ def test_mark_recovery_succeeded_updates_attempt_and_case():
         case_id="case_test_001",
         order_id="order_test_001",
         payment_id="pay_test_001",
+        subscription_id=None,
+        invoice_id=None,
     )
 
     db.commit.assert_called_once()

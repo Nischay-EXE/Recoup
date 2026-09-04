@@ -1,5 +1,4 @@
-from app.utils.time import utc_now
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -10,6 +9,7 @@ from app.db.recovery_models import (
 )
 from app.state.context import RecoveryContext
 from app.state.case_service import get_recovery_case
+from app.utils.time import utc_now
 
 
 ACTIVE_ATTEMPT_STATUSES = {
@@ -19,6 +19,51 @@ ACTIVE_ATTEMPT_STATUSES = {
     "execution_failed",
 }
 
+
+# ==========================================================
+# RECOVERY CADENCE
+# ==========================================================
+
+RECOVERY_CADENCE_MINUTES = {
+    1: 0,
+    2: 30,
+    3: 120,
+}
+
+
+def get_recovery_schedule(
+    attempt_number: int,
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    """
+    Return the deterministic execution time for a recovery attempt.
+
+    Attempt 1:
+        immediate
+
+    Attempt 2:
+        30 minutes later
+
+    Attempt 3:
+        2 hours later
+    """
+
+    current_time = now or utc_now()
+
+    delay_minutes = RECOVERY_CADENCE_MINUTES.get(
+        attempt_number,
+        0,
+    )
+
+    return current_time + timedelta(
+        minutes=delay_minutes,
+    )
+
+
+# ==========================================================
+# ATTEMPT COUNT
+# ==========================================================
 
 def get_previous_attempt_count(
     context: RecoveryContext,
@@ -42,6 +87,10 @@ def get_previous_attempt_count(
     )
 
 
+# ==========================================================
+# CREATE RECOVERY ATTEMPT
+# ==========================================================
+
 def create_recovery_attempt(
     context: RecoveryContext,
     decision: RecoveryDecisionRecord,
@@ -51,13 +100,6 @@ def create_recovery_attempt(
     # --------------------------------------------------
     # 1. Prevent duplicate attempt creation
     # --------------------------------------------------
-    #
-    # If the worker receives the same event again while
-    # the existing attempt is still active, return that
-    # attempt instead of creating another one.
-    #
-    # This works together with the idempotent
-    # create_recovery_decision() service.
     # --------------------------------------------------
 
     existing_active_attempt = (
@@ -86,6 +128,8 @@ def create_recovery_attempt(
         case_id=context.case_id,
         order_id=context.order_id,
         payment_id=context.payment_id,
+        subscription_id=context.subscription_id,
+        invoice_id=context.invoice_id,
     )
 
     if case is None:
@@ -96,7 +140,15 @@ def create_recovery_attempt(
     attempt_number = case.current_attempt + 1
 
     # --------------------------------------------------
-    # 3. Create recovery attempt
+    # 3. Determine deterministic execution time
+    # --------------------------------------------------
+
+    scheduled_at = get_recovery_schedule(
+        attempt_number,
+    )
+
+    # --------------------------------------------------
+    # 4. Create recovery attempt
     # --------------------------------------------------
 
     attempt = RecoveryAttempt(
@@ -104,7 +156,10 @@ def create_recovery_attempt(
         case_id=case.case_id,
         payment_id=context.payment_id,
         order_id=context.order_id,
+        subscription_id=context.subscription_id,
+        invoice_id=context.invoice_id,
         customer_id=context.customer_id,
+        batch_id=getattr(case, "batch_id", None),
 
         action=decision.action,
         channel=decision.channel,
@@ -112,9 +167,6 @@ def create_recovery_attempt(
         ai_reason=decision.reason,
         ai_confidence=float(decision.confidence),
 
-        # Policy validation is not implemented yet.
-        # These fields will be populated by the
-        # merchant-policy guard later.
         policy_result=None,
         policy_reason=None,
 
@@ -130,10 +182,13 @@ def create_recovery_attempt(
         amount_recovered=Decimal("0.00"),
 
         created_at=utc_now(),
+        scheduled_at=scheduled_at,
     )
 
     db.add(attempt)
+
     case.current_attempt = attempt_number
+
     db.commit()
     db.refresh(attempt)
 

@@ -10,11 +10,17 @@ class NormalizedEvent(BaseModel):
     source: str
     event_type: str
 
-    customer_id: str | None = None
+    # Revenue object identity
     payment_id: str | None = None
     order_id: str | None = None
+    subscription_id: str | None = None
+    invoice_id: str | None = None
+
+    customer_id: str | None = None
 
     amount: Decimal | None = None
+    amount_paid: Decimal | None = None
+    amount_due: Decimal | None = None
     currency: str | None = None
 
     status: str | None = None

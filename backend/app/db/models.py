@@ -37,6 +37,10 @@ class Event(Base):
         nullable=False,
     )
 
+    batch_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+
     received_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
