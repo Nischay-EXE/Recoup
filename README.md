@@ -55,32 +55,49 @@ The platform currently models three revenue objects through a common recovery en
 
 The merchant portal provides visibility into revenue at risk, recovered revenue, and active recovery cases.
 
-![Merchant dashboard showing revenue at risk, recovered revenue, and active recovery cases in the merchant portal](screenshots/merchant-dashboard.png)
+![Merchant Dashboard](screenshots/Merchant%20DashBoard.png)
 
-### Recovery Case
+### Recovery Cases
 
 Each recovery case provides a complete view of the recovery lifecycle, including AI strategy, guardrail decision, execution, and recovery outcome.
 
-![Recovery case details showing the AI strategy, guardrail decision, execution status, and recovery outcome in a structured lifecycle view](screenshots/recovery-case.png)
+![Recovery Cases](screenshots/recovery%20cases.png)
 
-### Developer Dashboard
+### Developer Overview
 
-The developer portal provides visibility into system events, AI decisions, and overall system health.
+The developer portal provides an operational overview of the recovery system.
 
-![Developer dashboard showing system events, AI decisions, and overall system health in the developer portal](screenshots/developer-dashboard.png)
+![Developer Overview](screenshots/developer%20overview.png)
 
-### Scheduled Recovery
+### AI Decisions
 
-Recovery actions can be scheduled for later execution, such as SMS or email reminders.
+Developers can inspect the decisions produced by the AI recovery workflow.
 
-![Scheduled recovery view showing recovery actions planned for later execution, including SMS and email reminders](screenshots/scheduled-recovery.png)
+![AI Decisions](screenshots/AI%20Decision.png)
 
-### Invoice Recovery
+### Events
 
-The system supports partial invoice payments and tracks the remaining amount until the invoice is fully recovered.
+The event explorer provides visibility into payment and recovery events flowing through the system.
 
-![Invoice recovery view showing a partial payment and the remaining amount required to fully recover the invoice](screenshots/invoice-recovery.png)
+![Events](screenshots/Events.png)
 
+### System Health
+
+The developer portal provides visibility into the health of the core recovery services.
+
+![System Health](screenshots/System%20Health.png)
+
+### Recovery Batches
+
+Recovery batches allow related recovery cases and events to be grouped for operational monitoring and investigation.
+
+![Recovery Batches](screenshots/Batches.png)
+
+### Escalations
+
+Unresolved recovery cases can be escalated for further investigation and action.
+
+![Escalations](screenshots/Escalations.png)
 ## Core features
 
 ### Event-driven processing
