@@ -48,6 +48,19 @@ The platform currently models three revenue objects through a common recovery en
 - **Invoice**
 - **Subscription**
 
+## Architecture
+
+The Revenue Recovery Agent follows an event-driven recovery pipeline with AI-assisted decision making and deterministic execution controls.
+
+![Revenue Recovery Agent Architecture](docs/Architecture/Recoup%20Architecture.png)
+
+### Core Flow
+
+**Razorpay Events → FastAPI → PostgreSQL / Redis → Recovery Worker → Analyst Agent → Strategist Agent → Policy Guardrail → Executor → Razorpay MCP → Outcome Correlation → Recovery Case**
+
+The system follows a simple principle:
+
+> **AI proposes. Deterministic policy decides. Controlled capabilities execute. Outcome correlation verifies.**
 ---
 ## Project Screenshots
 
@@ -427,19 +440,7 @@ Batch drilldown includes event and case exploration, normalized event data, reco
 
 ---
 
-## Architecture
 
-The Revenue Recovery Agent follows an event-driven recovery pipeline with AI-assisted decision making and deterministic execution controls.
-
-![Revenue Recovery Agent Architecture](docs/Architecture/Recoup%20Architecture.png)
-
-### Core Flow
-
-**Razorpay Events → FastAPI → PostgreSQL / Redis → Recovery Worker → Analyst Agent → Strategist Agent → Policy Guardrail → Executor → Razorpay MCP → Outcome Correlation → Recovery Case**
-
-The system follows a simple principle:
-
-> **AI proposes. Deterministic policy decides. Controlled capabilities execute. Outcome correlation verifies.**
 # Technology stack
 
 | Layer | Technology |
