@@ -2,7 +2,7 @@ export type RecoveryBatch = {
   batch_id: string
   name: string
   description: string | null
-  status: "active" | "completed" | string
+  status: "active" | "completed" | "deleted" | string
   started_at: string
   ended_at: string | null
   created_at: string

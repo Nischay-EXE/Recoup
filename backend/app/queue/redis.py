@@ -106,3 +106,9 @@ def ensure_consumer_group(
     except Exception as exc:
         if "BUSYGROUP" not in str(exc):
             raise
+
+def touch_heartbeat(key: str, ttl_seconds: int = 180) -> None:
+    """Write a short-lived liveness heartbeat to Redis."""
+    import time
+
+    redis_client.set(key, str(time.time()), ex=ttl_seconds)

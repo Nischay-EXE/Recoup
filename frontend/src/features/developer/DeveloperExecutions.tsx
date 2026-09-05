@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 
 import { apiGet } from "../../lib/api"
+import BatchSelector from "../../components/filters/BatchSelector"
 import { formatDateTime } from "../../lib/formatters"
 import type {
   RecoveryCase,
@@ -164,12 +165,13 @@ function TimelineQuery({ cases }: { cases: RecoveryCase[] }) {
 
 export default function DeveloperExecutions() {
   const [casePage, setCasePage] = useState(0)
+  const [batchId, setBatchId] = useState("")
 
   const query = useQuery({
-    queryKey: ["developer-executions-cases", casePage],
+    queryKey: ["developer-executions-cases", casePage, batchId],
     queryFn: () =>
       apiGet<RecoveryCasesResponse>(
-        `/recovery/cases?limit=${CASE_PAGE_SIZE}&offset=${casePage * CASE_PAGE_SIZE}`,
+        `/recovery/cases?limit=${CASE_PAGE_SIZE}&offset=${casePage * CASE_PAGE_SIZE}${batchId ? `&batch_id=${encodeURIComponent(batchId)}` : ""}`,
       ),
     refetchInterval: 30000,
   })
@@ -212,6 +214,10 @@ export default function DeveloperExecutions() {
           Refreshes every 30s
         </div>
       </header>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <BatchSelector value={batchId} onChange={(value) => { setBatchId(value); setCasePage(0) }} />
+      </div>
 
       <div className="grid gap-4 md:grid-cols-4">
         {[

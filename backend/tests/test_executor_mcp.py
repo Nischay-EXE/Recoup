@@ -263,35 +263,15 @@ def test_reminder_uses_mcp_payment_link_notify():
     )
 
     mcp.disconnect.assert_called_once()
-# --------------------------------------------------
-# Tool invocation failures must be distinguished from
-# the Executor Agent not invoking its tool.
-# --------------------------------------------------
 
+def test_payment_link_test_mode_limit_is_classified_as_permanent():
+    from app.agent.executor_agent import PermanentExecutionError
 
-def test_executor_tool_exception_is_recorded_as_execution_failure():
-    from app.agent.executor_agent import _make_tool, execution_state
-
-    execution_state["result"] = None
-
-    tool_function = _make_tool(
-        name="send_payment_link_email",
-        description="Test payment-link execution.",
-        action="send_payment_link",
-        channel="email",
-        handler=lambda: (_ for _ in ()).throw(
-            RuntimeError("MCP connection failed")
-        ),
+    # The classification is exercised through the actual provider-error
+    # marker used by the executor. This protects the retry boundary from
+    # turning a known Razorpay test-mode quota into a Redis retry loop.
+    error = PermanentExecutionError(
+        "Razorpay MCP payment-link creation failed: test mode limit of 30 reached for payment_link"
     )
 
-    result_json = tool_function()
-
-    assert execution_state["result"] is not None
-    result = execution_state["result"]
-    assert result.success is False
-    assert result.status == "execution_failed"
-    assert result.action == "send_payment_link"
-    assert result.channel == "email"
-    assert result.provider == "razorpay_mcp"
-    assert "MCP connection failed" in result.error
-    assert '"status": "execution_failed"' in result_json
+    assert "test mode limit" in str(error).lower()

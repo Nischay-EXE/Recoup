@@ -172,3 +172,75 @@ def test_invoice_partial_payment_is_cumulative_and_idempotent():
 
     finally:
         db.close()
+
+
+def test_partial_payment_reconciles_from_raw_invoice_when_normalized_due_is_wrong():
+    """A real invoice partial event must not become recovered because due=0 was normalized incorrectly."""
+    from app.db.models import Event
+
+    db = SessionLocal()
+    invoice_id = f"inv_raw_reconcile_{uuid.uuid4().hex}"
+    event_id = f"evt_raw_reconcile_{uuid.uuid4().hex}"
+    customer_id = f"cust_raw_reconcile_{uuid.uuid4().hex}"
+
+    try:
+        db.add(
+            Event(
+                source="razorpay",
+                event_id=event_id,
+                event_type="invoice.partially_paid",
+                payload={
+                    "event": "invoice.partially_paid",
+                    "payload": {
+                        "payment": {
+                            "entity": {
+                                "id": "pay_partial_raw",
+                                "amount": 10000000,
+                                "currency": "INR",
+                                "status": "captured",
+                            }
+                        },
+                        "invoice": {
+                            "entity": {
+                                "id": invoice_id,
+                                "customer_id": customer_id,
+                                "amount": 35700000,
+                                "amount_paid": 10000000,
+                                "amount_due": 25700000,
+                                "currency": "INR",
+                                "status": "partially_paid",
+                            }
+                        },
+                    },
+                },
+            )
+        )
+        normalized = NormalizedEvent(
+            event_id=event_id,
+            source="razorpay",
+            event_type="invoice_partially_paid",
+            customer_id=customer_id,
+            payment_id="pay_partial_raw",
+            order_id=None,
+            subscription_id=None,
+            invoice_id=invoice_id,
+            # Simulate the bad normalized values observed in production.
+            amount=Decimal("357000.00"),
+            amount_paid=Decimal("0.00"),
+            amount_due=Decimal("0.00"),
+            currency="INR",
+            status="partially_paid",
+        )
+        db.add(normalized)
+        db.commit()
+
+        case = record_invoice_partial_payment(normalized=normalized, db=db)
+        db.refresh(case)
+
+        assert case.amount_at_risk == Decimal("357000.00")
+        assert case.amount_recovered == Decimal("100000.00")
+        assert case.amount_at_risk - case.amount_recovered == Decimal("257000.00")
+        assert case.status == "open"
+        assert case.resolved_at is None
+    finally:
+        db.close()

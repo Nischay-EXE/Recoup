@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.db.database import SessionLocal
-from app.state.events import get_recovery_events
+from app.state.events import get_recovery_event_detail, get_recovery_events
 from app.state.escalation_query import get_support_escalation
 from app.state.audit import get_recovery_case_timeline
 from app.state.escalation_service import (
@@ -255,5 +255,17 @@ def recovery_events(
             limit=limit,
             offset=offset,
         )
+    finally:
+        db.close()
+
+
+@router.get("/events/{event_id}")
+def recovery_event_detail(event_id: str):
+    db = SessionLocal()
+    try:
+        event = get_recovery_event_detail(db=db, event_id=event_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail=f"Recovery event not found: {event_id}")
+        return event
     finally:
         db.close()

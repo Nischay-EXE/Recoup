@@ -25,11 +25,12 @@ from app.state.outcomes import (
     mark_recovery_succeeded,
     mark_recovery_failed,
     record_invoice_partial_payment,
+    mark_invoice_recovered_without_attempt,
 )
 
 from app.state.attempts import create_recovery_attempt
 
-from app.state.case_service import get_or_create_recovery_case
+from app.state.case_service import get_or_create_recovery_case, get_recovery_case_by_invoice
 from app.state.escalation_service import create_support_escalation
 
 from app.state.context_service import build_recovery_context
@@ -39,6 +40,7 @@ from app.state.executor import execute_recovery_attempt
 from app.state.stopping_rules import evaluate_stopping_rules
 from app.state.escalation import evaluate_escalation_rules
 from app.utils.time import utc_now
+from app.state.health import touch_worker_heartbeat
 
 CONSUMER_GROUP = "recovery-workers"
 
@@ -194,6 +196,20 @@ def process_captured_event(
     )
 
     if attempt is None:
+        if normalized.invoice_id:
+            case = mark_invoice_recovered_without_attempt(
+                normalized=normalized,
+                db=db,
+            )
+            if case is not None:
+                print(
+                    f"[WORKER] Invoice paid correlated directly to recovery case "
+                    f"event={normalized.event_id} "
+                    f"case_id={case.case_id} "
+                    f"amount_recovered={case.amount_recovered}"
+                )
+                return
+
         print(
             f"[WORKER] Captured payment has no "
             f"unambiguous recovery match "
@@ -221,6 +237,23 @@ def process_captured_event(
     # --------------------------------------------------
 
     if attempt.status != "sent":
+        # A final invoice payment can arrive before a scheduled reminder
+        # executes. In that race, the invoice itself is the authoritative
+        # outcome and should close the case rather than leaving it open.
+        if normalized.invoice_id:
+            case = mark_invoice_recovered_without_attempt(
+                normalized=normalized,
+                db=db,
+            )
+            if case is not None:
+                print(
+                    f"[WORKER] Invoice paid before recovery attempt execution "
+                    f"attempt_id={attempt.id} "
+                    f"case_id={case.case_id} "
+                    f"case_status={case.status}"
+                )
+                return
+
         print(
             f"[WORKER] Recovery attempt is not awaiting outcome "
             f"attempt_id={attempt.id} "
@@ -235,6 +268,33 @@ def process_captured_event(
         db,
         recovered_amount,
     )
+
+    if normalized.invoice_id:
+        case = (
+            db.query(RecoveryCase)
+            .filter(RecoveryCase.case_id == attempt.case_id)
+            .first()
+        )
+        if case is not None:
+            pending_attempts = (
+                db.query(RecoveryAttempt)
+                .filter(
+                    RecoveryAttempt.case_id == case.case_id,
+                    RecoveryAttempt.id != attempt.id,
+                    RecoveryAttempt.status.in_(
+                        {"proposed", "approved", "execution_failed"}
+                    ),
+                )
+                .all()
+            )
+            for pending_attempt in pending_attempts:
+                pending_attempt.status = "stopped"
+                pending_attempt.resolved_at = utc_now()
+                pending_attempt.execution_error = (
+                    "Invoice was fully paid before the scheduled recovery attempt executed."
+                )
+            if pending_attempts:
+                db.commit()
 
     print(
         f"[WORKER] Recovery succeeded "
@@ -378,11 +438,50 @@ def process_event(event_id: str):
             "invoice_partially_paid",
             "invoice.partially_paid",
         }:
-            record_invoice_partial_payment(
+            existing_partial_case = (
+                get_recovery_case_by_invoice(
+                    db,
+                    invoice_id=normalized.invoice_id,
+                )
+                if normalized.invoice_id
+                else None
+            )
+            previous_amount_recovered = (
+                existing_partial_case.amount_recovered
+                if existing_partial_case is not None
+                else None
+            )
+
+            partial_case = record_invoice_partial_payment(
                 normalized=normalized,
                 db=db,
             )
-            return
+
+            if partial_case is not None and partial_case.status == "recovered":
+                print(
+                    f"[WORKER] Partial invoice payment fully recovered "
+                    f"event={normalized.event_id} "
+                    f"case_id={partial_case.case_id}"
+                )
+                return
+
+            # `amount_paid` is cumulative in Razorpay. If this webhook did
+            # not increase the recorded cumulative amount, it is a duplicate
+            # or stale event and must not create another AI decision/reminder.
+            if (
+                existing_partial_case is not None
+                and previous_amount_recovered is not None
+                and partial_case is not None
+                and partial_case.amount_recovered <= previous_amount_recovered
+            ):
+                print(
+                    f"[WORKER] Duplicate/stale partial invoice event ignored "
+                    f"event={normalized.event_id} "
+                    f"invoice_id={normalized.invoice_id} "
+                    f"case_id={partial_case.case_id} "
+                    f"amount_recovered={partial_case.amount_recovered}"
+                )
+                return
 
         # --------------------------------------------------
         # 4. Handle successful payment outcomes
@@ -1087,6 +1186,8 @@ def run_worker() -> None:
     # --------------------------------------------------
 
     while True:
+
+        touch_worker_heartbeat(CONSUMER_NAME)
 
         # --------------------------------------------------
         # 1. Recover old pending messages

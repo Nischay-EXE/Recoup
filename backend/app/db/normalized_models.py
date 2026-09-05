@@ -98,3 +98,5 @@ class NormalizedEvent(Base):
         DateTime,
         nullable=True,
     )
+
+

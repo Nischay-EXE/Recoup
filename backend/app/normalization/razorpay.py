@@ -118,20 +118,30 @@ def normalize_razorpay_event(
     # --------------------------------------------------
     # Amount
     #
-    # Payment amount is preferred.
-    # Invoice amount is used when there is no payment.
-    # Subscription lifecycle events may not contain an
-    # amount, so amount remains None in that case.
+    # The meaning of `amount` depends on the revenue object.
+    # For invoice lifecycle events, `invoice.entity.amount` is
+    # the TOTAL invoice value. The nested payment entity can
+    # represent only the payment being made and must therefore
+    # never override the invoice total.
+    #
+    # For payment events, use `payment.entity.amount`.
+    # For subscription events with a payment entity, use the
+    # payment amount.
     # --------------------------------------------------
 
-    amount_in_smallest_unit = payment_entity.get(
-        "amount"
-    )
-
-    if amount_in_smallest_unit is None:
+    if invoice_entity and event_type.startswith("invoice."):
         amount_in_smallest_unit = invoice_entity.get(
             "amount"
         )
+    else:
+        amount_in_smallest_unit = payment_entity.get(
+            "amount"
+        )
+
+        if amount_in_smallest_unit is None:
+            amount_in_smallest_unit = invoice_entity.get(
+                "amount"
+            )
 
     amount = None
 
@@ -187,23 +197,38 @@ def normalize_razorpay_event(
     # Currency
     # --------------------------------------------------
 
-    currency = (
-        payment_entity.get("currency")
-        or invoice_entity.get("currency")
-    )
+    if invoice_entity and event_type.startswith("invoice."):
+        currency = (
+            invoice_entity.get("currency")
+            or payment_entity.get("currency")
+        )
+    else:
+        currency = (
+            payment_entity.get("currency")
+            or invoice_entity.get("currency")
+        )
 
     # --------------------------------------------------
     # Status
     #
-    # Payment status is preferred when a payment exists.
-    # Otherwise use subscription or invoice status.
+    # Invoice lifecycle events describe the invoice state, so
+    # invoice status must win over the nested payment status.
+    # Otherwise `invoice.partially_paid` can incorrectly look
+    # like a payment with status `attempted`.
     # --------------------------------------------------
 
-    status = (
-        payment_entity.get("status")
-        or subscription_entity.get("status")
-        or invoice_entity.get("status")
-    )
+    if invoice_entity and event_type.startswith("invoice."):
+        status = (
+            invoice_entity.get("status")
+            or payment_entity.get("status")
+            or subscription_entity.get("status")
+        )
+    else:
+        status = (
+            payment_entity.get("status")
+            or subscription_entity.get("status")
+            or invoice_entity.get("status")
+        )
 
     normalized_event_type = event_type.replace(
         ".",

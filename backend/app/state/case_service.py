@@ -102,6 +102,21 @@ def get_recovery_case(
     return None
 
 
+def get_recovery_case_by_invoice(
+    db: Session,
+    *,
+    invoice_id: str,
+) -> RecoveryCase | None:
+    """Find an invoice recovery case regardless of lifecycle status."""
+
+    return (
+        db.query(RecoveryCase)
+        .filter(RecoveryCase.invoice_id == invoice_id)
+        .order_by(RecoveryCase.id.desc())
+        .first()
+    )
+
+
 def create_recovery_case(
     db: Session,
     *,

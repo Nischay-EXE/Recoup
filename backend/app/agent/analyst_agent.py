@@ -4,9 +4,71 @@ import os
 from dotenv import load_dotenv
 from strands import Agent
 from strands.models.openai import OpenAIModel
+from pydantic import BaseModel, Field, field_validator
 
 from app.agent.schema import AnalystReport
 from app.state.context import RecoveryContext
+
+
+class _AnalystReportWire(BaseModel):
+    """Provider-facing schema tolerant of common JSON serialization drift."""
+
+    failure_analysis: str = ""
+    customer_analysis: str = ""
+    # Groq/Strands structured tool schemas are more reliable with scalar
+    # fields. Keep these provider-facing values as JSON-encoded strings and
+    # normalize them into real lists at the application boundary.
+    recovery_factors: str | None = ""
+    risk_level: str = "medium"
+    considerations: str | None = ""
+
+    @field_validator("recovery_factors", "considerations", mode="before")
+    @classmethod
+    def normalize_list_wire_value(cls, value):
+        """Accept provider arrays but expose a scalar JSON string schema."""
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value)
+
+    @field_validator("risk_level", mode="before")
+    @classmethod
+    def normalize_risk_level(cls, value):
+        value = str(value or "medium").strip().lower()
+        return value if value in {"low", "medium", "high"} else "medium"
+
+
+def _normalize_string_list(value) -> list[str]:
+    """Normalize provider output such as a single string into a real list."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        return [text]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _to_analyst_report(raw) -> AnalystReport:
+    """Convert tolerant provider output into the strict application model."""
+    data = raw.model_dump() if hasattr(raw, "model_dump") else dict(raw)
+    return AnalystReport(
+        failure_analysis=str(data.get("failure_analysis") or ""),
+        customer_analysis=str(data.get("customer_analysis") or ""),
+        recovery_factors=_normalize_string_list(data.get("recovery_factors")),
+        risk_level=str(data.get("risk_level") or "medium").lower(),
+        considerations=_normalize_string_list(data.get("considerations")),
+    )
 
 
 # --------------------------------------------------
@@ -63,32 +125,27 @@ STRICT RULES:
 - Do not provide chain-of-thought or reasoning.
 
 STRUCTURED OUTPUT REQUIREMENTS:
-- recovery_factors MUST be an array/list of strings.
-- considerations MUST be an array/list of strings.
-- NEVER return recovery_factors as a single string.
-- NEVER return considerations as a single string.
-- If there is only one factor, return ["that factor"].
-- If there is only one consideration, return ["that consideration"].
-- If there are no relevant factors, return [].
-- If there are no relevant considerations, return [].
+- recovery_factors MUST be a JSON-encoded string containing an array of strings.
+  Example: "[\"factor one\",\"factor two\"]"
+- considerations MUST be a JSON-encoded string containing an array of strings.
+  Example: "[\"consideration one\"]"
+- Do not return recovery_factors or considerations as a native array in the
+  JSON response; encode the array as a JSON string.
+- If there are no relevant factors, return "[]".
+- If there are no relevant considerations, return "[]".
 - risk_level MUST be exactly one of: "low", "medium", "high".
 
 The expected conceptual shape is:
 
 {
-  "summary": "brief factual summary",
-  "recovery_factors": [
-    "factor one",
-    "factor two"
-  ],
+  "failure_analysis": "brief factual failure/risk analysis",
+  "customer_analysis": "brief factual customer-history analysis",
+  "recovery_factors": "[\"factor one\",\"factor two\"]",
   "risk_level": "medium",
-  "considerations": [
-    "consideration one",
-    "consideration two"
-  ]
+  "considerations": "[\"consideration one\",\"consideration two\"]"
 }
 
-Return only the structured AnalystReport.
+Return only the JSON AnalystReport object.
 """
 
 
@@ -238,19 +295,13 @@ You MUST follow the field types exactly.
 
 In particular:
 
-recovery_factors = ARRAY OF STRINGS
+recovery_factors = JSON-ENCODED ARRAY STRING
 Example:
-["failed payment", "previous successful payment"]
+"[\"failed payment\",\"previous successful payment\"]"
 
-NOT:
-"failed payment"
-
-considerations = ARRAY OF STRINGS
+considerations = JSON-ENCODED ARRAY STRING
 Example:
-["A payment retry may be appropriate"]
-
-NOT:
-"A payment retry may be appropriate"
+"[\"A payment retry may be appropriate\"]"
 
 Return the structured AnalystReport only.
 """
@@ -281,42 +332,19 @@ STRICT OUTPUT RULES:
 - Do not provide chain-of-thought.
 
 FIELD TYPES:
-- summary: string
-- recovery_factors: ARRAY OF STRINGS
+- failure_analysis: string
+- customer_analysis: string
+- recovery_factors: JSON-encoded array string
 - risk_level: one of "low", "medium", "high"
-- considerations: ARRAY OF STRINGS
+- considerations: JSON-encoded array string
 
-Examples of VALID array values:
+Examples:
+recovery_factors: "[\"The current payment failed\",\"Customer has previous successful payments\"]"
+considerations: "[\"A recovery intervention may be appropriate\"]"
 
-recovery_factors:
-[
-  "The current payment failed",
-  "Customer has previous successful payments"
-]
+If there are no items, return "[]".
 
-considerations:
-[
-  "A recovery intervention may be appropriate"
-]
-
-If only one item exists, it is STILL an array:
-
-recovery_factors:
-[
-  "The current payment failed"
-]
-
-Never produce:
-
-recovery_factors:
-"The current payment failed"
-
-Never produce:
-
-considerations:
-"A recovery intervention may be appropriate"
-
-Return only the structured AnalystReport.
+Return only the JSON AnalystReport object.
 
 VERIFIED RECOVERY CONTEXT:
 {context_json}
@@ -327,57 +355,84 @@ VERIFIED RECOVERY CONTEXT:
 # Analysis Function
 # --------------------------------------------------
 
+def _extract_analyst_payload(result) -> dict:
+    """Extract and validate a JSON object from a plain Strands Agent result.
+
+    We intentionally do not use ``structured_output_model`` here. Strands
+    implements structured output as a generated tool specification, and the
+    Groq model used by this project has repeatedly returned native arrays for
+    fields that the generated schema declared as strings. That failure occurs
+    before our Pydantic validators can normalize the value.
+    """
+    text = str(result).strip()
+    if not text:
+        raise ValueError("Analyst returned an empty response.")
+
+    # Remove common markdown fencing without requiring the model to use it.
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        # Be tolerant if the model adds a short prefix/suffix around the JSON.
+        decoder = json.JSONDecoder()
+        payload = None
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            try:
+                candidate, _ = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                payload = candidate
+                break
+        if payload is None:
+            raise ValueError("Analyst response was not valid JSON.")
+
+    if not isinstance(payload, dict):
+        raise ValueError("Analyst response must be a JSON object.")
+
+    return payload
+
+
 def analyze_recovery_context(
     context: RecoveryContext,
 ) -> AnalystReport:
+    """Analyze a verified RecoveryContext with plain JSON output.
+
+    The provider response is parsed locally and then validated against the
+    application's strict ``AnalystReport`` model. This keeps provider output
+    drift outside the business-state contract while avoiding the Strands
+    structured-output tool/schema path that has been rejecting native arrays.
     """
-    Analyze a verified RecoveryContext using a compact,
-    decision-relevant representation.
-
-    The full RecoveryContext remains intact for audit/history.
-    Only the LLM input is intentionally bounded.
-
-    A single retry is performed if the model produces structured output
-    that fails the AnalystReport schema validation.
-    """
-
     compact_context = _build_compact_context(context)
-
-    context_json = json.dumps(
-        compact_context,
-        separators=(",", ":"),
-    )
-
+    context_json = json.dumps(compact_context, separators=(",", ":"))
     analyst = build_recovery_analyst()
 
-    prompt = _build_analysis_prompt(
-        context_json=context_json,
-        retry=False,
-    )
-
-    try:
-        result = analyst(
-            prompt,
-            structured_output_model=AnalystReport,
-        )
-
-        return result.structured_output
-
-    except Exception as first_error:
-        print(
-            "[ANALYST] Structured output validation failed; "
-            "retrying once with strict array instructions. "
-            f"error={first_error}"
-        )
-
-        retry_prompt = _build_analysis_prompt(
+    for retry in (False, True):
+        prompt = _build_analysis_prompt(
             context_json=context_json,
-            retry=True,
+            retry=retry,
         )
+        try:
+            result = analyst(prompt)
+            payload = _extract_analyst_payload(result)
+            return _to_analyst_report(payload)
+        except Exception as exc:
+            if not retry:
+                print(
+                    "[ANALYST] Plain JSON output parsing/validation failed; "
+                    "retrying once with strict JSON instructions. "
+                    f"error={exc}"
+                )
+                continue
+            raise
 
-        result = analyst(
-            retry_prompt,
-            structured_output_model=AnalystReport,
-        )
-
-        return result.structured_output
+    raise RuntimeError("Analyst analysis failed unexpectedly.")

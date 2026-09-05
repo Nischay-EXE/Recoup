@@ -376,3 +376,5 @@ def test_new_subscription_pending_event_does_not_reuse_old_active_attempt():
 
     finally:
         db.close()
+
+

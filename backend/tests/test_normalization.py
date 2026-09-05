@@ -1,3 +1,4 @@
+from decimal import Decimal
 from app.normalization.razorpay import normalize_razorpay_event
 
 
@@ -110,3 +111,49 @@ def test_normalize_subscription_charged_event():
     assert result.amount == 1500
     assert result.currency == "INR"
     assert result.status == "captured"
+
+
+def test_normalize_invoice_partial_payment_uses_invoice_total_not_payment_amount():
+    """Invoice amount is the full invoice even when a nested payment is partial."""
+    payload = {
+        "entity": "event",
+        "event": "invoice.partially_paid",
+        "contains": ["payment", "order", "invoice"],
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": "pay_partial_100000",
+                    "amount": 10000000,
+                    "currency": "INR",
+                    "status": "attempted",
+                    "order_id": "order_partial_001",
+                }
+            },
+            "invoice": {
+                "entity": {
+                    "id": "inv_partial_001",
+                    "customer_id": "cust_partial_001",
+                    "order_id": "order_partial_001",
+                    "payment_id": "pay_partial_100000",
+                    "status": "partially_paid",
+                    "amount": 44600000,
+                    "amount_paid": 10000000,
+                    "amount_due": 34600000,
+                    "currency": "INR",
+                }
+            },
+        },
+    }
+
+    result = normalize_razorpay_event(
+        payload=payload,
+        event_id="evt_invoice_partial_001",
+    )
+
+    assert result.event_type == "invoice_partially_paid"
+    assert result.invoice_id == "inv_partial_001"
+    assert result.payment_id == "pay_partial_100000"
+    assert result.amount == Decimal("446000.00")
+    assert result.amount_paid == Decimal("100000.00")
+    assert result.amount_due == Decimal("346000.00")
+    assert result.status == "partially_paid"

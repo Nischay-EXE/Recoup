@@ -5,6 +5,7 @@ import { motion } from "motion/react"
 import { Bot, ChevronLeft, ChevronRight, Search, ShieldCheck } from "lucide-react"
 
 import { apiGet } from "../../lib/api"
+import BatchSelector from "../../components/filters/BatchSelector"
 import type { RecoveryCasesResponse } from "../../types/recovery"
 
 const PAGE_SIZE = 12
@@ -31,13 +32,14 @@ function statusClass(status: string) {
 
 export default function DeveloperAIDecisions() {
   const [search, setSearch] = useState("")
+  const [batchId, setBatchId] = useState("")
   const [page, setPage] = useState(0)
 
   const query = useQuery({
-    queryKey: ["developer-ai-decisions", page],
+    queryKey: ["developer-ai-decisions", page, batchId],
     queryFn: () =>
       apiGet<RecoveryCasesResponse>(
-        `/recovery/cases?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`,
+        `/recovery/cases?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}${batchId ? `&batch_id=${encodeURIComponent(batchId)}` : ""}`,
       ),
   })
 
@@ -78,6 +80,10 @@ export default function DeveloperAIDecisions() {
           </div>
         </div>
       </header>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <BatchSelector value={batchId} onChange={(value) => { setBatchId(value); setPage(0) }} />
+      </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="relative">

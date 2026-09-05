@@ -14,6 +14,7 @@ import { Link } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 
 import { apiGet } from "../../lib/api"
+import BatchSelector from "../../components/filters/BatchSelector"
 import { formatDateShort } from "../../lib/formatters"
 
 type RecoveryCase = {
@@ -119,6 +120,7 @@ function revenueObjectLabel(value: string) {
 export default function MerchantRecoveryCases() {
   const [status, setStatus] = useState("")
   const [revenueObjectType, setRevenueObjectType] = useState("")
+  const [batchId, setBatchId] = useState("")
   const [search, setSearch] = useState("")
   const [page, setPage] = useState(0)
 
@@ -129,6 +131,7 @@ export default function MerchantRecoveryCases() {
       "recovery-cases",
       status,
       revenueObjectType,
+      batchId,
       page,
     ],
     queryFn: () =>
@@ -141,7 +144,7 @@ export default function MerchantRecoveryCases() {
                 revenueObjectType,
               )}`
             : ""
-        }`,
+        }${batchId ? `&batch_id=${encodeURIComponent(batchId)}` : ""}`,
       ),
   })
 
@@ -177,6 +180,7 @@ export default function MerchantRecoveryCases() {
   function resetFilters() {
     setStatus("")
     setRevenueObjectType("")
+    setBatchId("")
     setSearch("")
     setPage(0)
   }
@@ -242,6 +246,11 @@ export default function MerchantRecoveryCases() {
                 className="hidden text-slate-400 sm:block"
               />
 
+              <BatchSelector
+                value={batchId}
+                onChange={(value) => { setBatchId(value); setPage(0) }}
+              />
+
               <select
                 value={status}
                 onChange={(event) =>
@@ -276,7 +285,7 @@ export default function MerchantRecoveryCases() {
                 ))}
               </select>
 
-              {(status || revenueObjectType || search) && (
+              {(status || revenueObjectType || batchId || search) && (
                 <button
                   type="button"
                   onClick={resetFilters}

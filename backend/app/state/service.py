@@ -91,7 +91,7 @@ def create_recovery_decision(
 
         record = RecoveryDecisionRecord(
             event_id=context.event_id,
-            batch_id=context.batch_id,
+            batch_id=getattr(context, "batch_id", None),
             action=action,
             channel=channel,
             reason=reason,
@@ -135,7 +135,7 @@ def create_recovery_decision(
 
     record = RecoveryDecisionRecord(
         event_id=context.event_id,
-        batch_id=context.batch_id,
+        batch_id=getattr(context, "batch_id", None),
         action=strategy.action,
         channel=strategy.channel,
         reason=strategy.reason,

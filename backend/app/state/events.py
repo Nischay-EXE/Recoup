@@ -348,3 +348,73 @@ def get_recovery_events(
         "limit": limit,
         "offset": offset,
     }
+
+
+def get_recovery_event_detail(
+    db: Session,
+    *,
+    event_id: str,
+) -> dict | None:
+    """Return one persisted event with full raw payload and lineage."""
+    row = (
+        db.query(Event, NormalizedEvent)
+        .outerjoin(
+            NormalizedEvent,
+            NormalizedEvent.event_id == Event.event_id,
+        )
+        .filter(Event.event_id == event_id)
+        .first()
+    )
+    if row is None:
+        return None
+
+    event, normalized = row
+    recovery_case, recovery_case_match = _find_recovery_case(
+        db,
+        event=event,
+        normalized=normalized,
+    )
+
+    return {
+        "event_id": event.event_id,
+        "batch_id": event.batch_id,
+        "source": event.source,
+        "event_type": event.event_type,
+        "received_at": event.received_at,
+        "payload": event.payload,
+        "normalized": (
+            {
+                "event_id": normalized.event_id,
+                "customer_id": normalized.customer_id,
+                "payment_id": normalized.payment_id,
+                "order_id": normalized.order_id,
+                "subscription_id": normalized.subscription_id,
+                "invoice_id": normalized.invoice_id,
+                "amount": _decimal_to_float(normalized.amount),
+                "amount_paid": _decimal_to_float(normalized.amount_paid),
+                "amount_due": _decimal_to_float(normalized.amount_due),
+                "currency": normalized.currency,
+                "status": normalized.status,
+                "occurred_at": normalized.occurred_at,
+                "received_at": normalized.received_at,
+            }
+            if normalized else None
+        ),
+        "recovery_case": (
+            {
+                "case_id": recovery_case.case_id,
+                "status": recovery_case.status,
+                "revenue_object_type": recovery_case.revenue_object_type,
+                "amount_at_risk": _decimal_to_float(recovery_case.amount_at_risk),
+                "amount_recovered": _decimal_to_float(recovery_case.amount_recovered),
+                "amount_remaining": max(
+                    0.0,
+                    float(recovery_case.amount_at_risk or 0)
+                    - float(recovery_case.amount_recovered or 0),
+                ),
+                "current_attempt": recovery_case.current_attempt,
+            }
+            if recovery_case else None
+        ),
+        "recovery_case_match": recovery_case_match,
+    }

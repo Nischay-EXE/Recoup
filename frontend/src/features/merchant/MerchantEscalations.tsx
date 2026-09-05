@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 
 import { apiGet } from "../../lib/api"
+import BatchSelector from "../../components/filters/BatchSelector"
 import { formatDateShort } from "../../lib/formatters"
 
 type RecoveryCase = {
@@ -166,6 +167,7 @@ export default function MerchantEscalations() {
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(
     null,
   )
+  const [batchId, setBatchId] = useState("")
 
   const [assignedTeam, setAssignedTeam] = useState("")
   const [assignedTo, setAssignedTo] = useState("")
@@ -173,10 +175,10 @@ export default function MerchantEscalations() {
   const [actionError, setActionError] = useState<string | null>(null)
 
   const casesQuery = useQuery({
-    queryKey: ["recovery-cases", "escalated"],
+    queryKey: ["recovery-cases", "escalated", batchId],
     queryFn: () =>
       apiGet<RecoveryCasesResponse>(
-        "/recovery/cases?status=escalated&limit=100",
+        `/recovery/cases?status=escalated&limit=100${batchId ? `&batch_id=${encodeURIComponent(batchId)}` : ""}`,
       ),
   })
 
@@ -329,6 +331,10 @@ export default function MerchantEscalations() {
         <div className="rounded-full border border-red-500/20 bg-red-500/5 px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-300">
           {cases.length} open escalations
         </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <BatchSelector value={batchId} onChange={(value) => { setBatchId(value); setSelectedCaseId(null) }} />
       </div>
 
       {/* Main layout */}

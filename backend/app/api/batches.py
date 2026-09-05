@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.db.database import SessionLocal
-from app.state.batch_service import create_batch, close_batch, get_batch, list_batches
+from app.state.batch_service import create_batch, close_batch, delete_batch, get_batch, list_batches, reopen_batch
 
 router = APIRouter(prefix="/recovery/batches", tags=["recovery-batches"])
 
@@ -60,5 +60,38 @@ def finish_recovery_batch(batch_id: str):
         if batch is None:
             raise HTTPException(status_code=404, detail=f"Recovery batch not found: {batch_id}")
         return get_batch(db, batch_id)
+    finally:
+        db.close()
+
+
+@router.post("/{batch_id}/open")
+def reopen_recovery_batch(batch_id: str):
+    db = SessionLocal()
+    try:
+        try:
+            batch = reopen_batch(db, batch_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        if batch is None:
+            raise HTTPException(status_code=404, detail=f"Recovery batch not found: {batch_id}")
+        return get_batch(db, batch_id)
+    finally:
+        db.close()
+
+
+@router.delete("/{batch_id}")
+def remove_recovery_batch(batch_id: str):
+    db = SessionLocal()
+    try:
+        try:
+            batch = delete_batch(db, batch_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        if batch is None:
+            raise HTTPException(status_code=404, detail=f"Recovery batch not found: {batch_id}")
+        return {
+            "status": "deleted",
+            "batch_id": batch.batch_id,
+        }
     finally:
         db.close()

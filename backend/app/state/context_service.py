@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from sqlalchemy.orm import Session
 
 from app.db.history_models import Customer, Order, Payment
@@ -190,6 +192,10 @@ def build_recovery_context(
         "subscription.pending",
         "subscription_halted",
         "subscription.halted",
+        "invoice_expired",
+        "invoice.expired",
+        "invoice_partially_paid",
+        "invoice.partially_paid",
     }:
         # A Razorpay Payment Link creates a new order/payment when the
         # customer retries through the link. The payment payload preserves
@@ -222,6 +228,7 @@ def build_recovery_context(
         ),
         subscription_id=normalized.subscription_id,
         invoice_id=normalized.invoice_id,
+        batch_id=normalized.batch_id,
     )
 
         # Keep the case's current payment pointed at the newest payment
@@ -293,6 +300,35 @@ def build_recovery_context(
     # 8. Build verified context
     # --------------------------------------------------
 
+    invoice_remaining = normalized.amount_due
+
+    # For invoice partial-payment recovery, the case is the authoritative
+    # recovery ledger. This avoids trusting a stale/missing amount_due from a
+    # webhook after the partial-payment handler has already reconciled the
+    # cumulative paid amount.
+    if (
+        normalized.invoice_id
+        and normalized.event_type in {
+            "invoice_partially_paid",
+            "invoice.partially_paid",
+        }
+        and case is not None
+        and case.amount_at_risk is not None
+    ):
+        invoice_remaining = max(
+            case.amount_at_risk - (case.amount_recovered or Decimal("0.00")),
+            Decimal("0.00"),
+        )
+    elif (
+        normalized.invoice_id
+        and normalized.amount is not None
+        and normalized.amount_paid is not None
+    ):
+        invoice_remaining = max(
+            normalized.amount - normalized.amount_paid,
+            Decimal("0.00"),
+        )
+
     return RecoveryContext(
 
         # Current event
@@ -319,7 +355,41 @@ def build_recovery_context(
         subscription_id=normalized.subscription_id,
         invoice_id=normalized.invoice_id,
 
-        amount=normalized.amount,
+        amount=(
+            invoice_remaining
+            if (
+                normalized.invoice_id
+                and normalized.event_type in {
+                    "invoice_partially_paid",
+                    "invoice.partially_paid",
+                }
+                and invoice_remaining is not None
+            )
+            else normalized.amount
+        ),
+        amount_at_risk=(
+            case.amount_at_risk
+            if case is not None
+            else normalized.amount
+        ),
+        amount_recovered=(
+            case.amount_recovered
+            if case is not None
+            else (
+                normalized.amount_paid
+                if normalized.amount_paid is not None
+                else Decimal("0.00")
+            )
+        ),
+        amount_remaining=(
+            invoice_remaining
+            if normalized.invoice_id and invoice_remaining is not None
+            else (
+                case.amount_at_risk - case.amount_recovered
+                if case is not None and case.amount_at_risk is not None
+                else None
+            )
+        ),
         currency=normalized.currency,
         payment_status=normalized.status,
 

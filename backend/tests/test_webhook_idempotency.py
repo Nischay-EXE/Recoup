@@ -67,4 +67,4 @@ def test_duplicate_webhook_event_is_not_reprocessed():
     publish_event.assert_not_called()
 
     request.body.assert_awaited_once()
-    
+

@@ -72,3 +72,26 @@ def test_get_recovery_breakdowns_groups_attempts():
 
     assert result["by_channel"]["sms"]["attempts"] == 1
     assert result["by_channel"]["sms"]["recovered_attempts"] == 0
+
+def test_get_recovery_breakdowns_does_not_create_unknown_for_orphan_payment_attempt():
+    db = MagicMock()
+
+    orphan_payment_attempt = SimpleNamespace(
+        action="send_payment_link",
+        channel="email",
+        status="execution_failed",
+        amount_recovered=Decimal("0"),
+        payment_id="pay_orphan",
+        order_id=None,
+        subscription_id=None,
+        invoice_id=None,
+    )
+
+    db.query.return_value.outerjoin.return_value.all.return_value = [
+        (orphan_payment_attempt, None),
+    ]
+
+    result = get_recovery_breakdowns(db)
+
+    assert "unknown" not in result["by_revenue_object"]
+    assert result["by_revenue_object"]["payment"]["attempts"] == 1

@@ -110,7 +110,15 @@ be a reasonable recovery option.
 DECISION GUIDELINES:
 
 - If the payment is already successful, choose no_action.
-- If the event is not a payment failure, choose no_action.
+- If the event is a successful payment, choose no_action.
+- For invoice.partially_paid, treat the outstanding amount as an active
+  receivable that may require recovery. Do NOT choose no_action merely
+  because the event is not a payment failure.
+- For a first recovery action on a partially paid invoice, prefer
+  send_payment_link when no prior recovery Payment Link exists.
+- For a later partially paid invoice attempt where a prior recovery
+  Payment Link was already sent, send_reminder is appropriate when
+  supported by the execution capabilities.
 - Consider the payment failure reason when available.
 - Consider customer payment history when available.
 - Consider previous recovery attempts across the entire recovery case.
@@ -211,6 +219,11 @@ def propose_strategy(
             ),
             "currency": context.currency,
             "status": context.payment_status,
+            "amount_remaining": (
+                str(context.amount_remaining)
+                if context.amount_remaining is not None
+                else None
+            ),
             "failure_reason": getattr(
                 context,
                 "payment_failure_reason",
@@ -225,15 +238,20 @@ def propose_strategy(
         },
         "recovery": {
             "previous_attempts": context.previous_attempts,
-            "amount_at_risk": getattr(
-                context,
-                "amount_at_risk",
-                None,
+            "amount_at_risk": (
+                str(context.amount_at_risk)
+                if context.amount_at_risk is not None
+                else None
             ),
-            "amount_recovered": getattr(
-                context,
-                "amount_recovered",
-                None,
+            "amount_recovered": (
+                str(context.amount_recovered)
+                if context.amount_recovered is not None
+                else None
+            ),
+            "amount_remaining": (
+                str(context.amount_remaining)
+                if context.amount_remaining is not None
+                else None
             ),
         },
         "previous_recovery_attempts": [

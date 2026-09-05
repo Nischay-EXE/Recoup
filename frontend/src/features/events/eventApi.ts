@@ -5,6 +5,7 @@ export type EventExplorerParams = {
   search?: string
   eventType?: string
   revenueObjectType?: string
+  batchId?: string
   limit?: number
   offset?: number
 }
@@ -27,6 +28,10 @@ export async function getRecoveryEvents(
       "revenue_object_type",
       params.revenueObjectType,
     )
+  }
+
+  if (params.batchId) {
+    searchParams.set("batch_id", params.batchId)
   }
 
   searchParams.set(

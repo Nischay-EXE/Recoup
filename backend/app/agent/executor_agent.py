@@ -55,6 +55,10 @@ SUPPORTED_REAL_PAYMENT_LINK_CHANNELS = {
 }
 
 
+class PermanentExecutionError(RuntimeError):
+    """Raised when a provider rejects execution for a non-transient reason."""
+
+
 @dataclass
 class ExecutionResult:
     """Deterministic result returned by the Executor tool layer."""
@@ -500,10 +504,7 @@ def _create_or_reuse_payment_link(
                 "customer_email": customer.email,
                 "customer_contact": customer.phone,
                 "reference_id": reference_id,
-                "description": (
-                    "Payment recovery for attempt "
-                    f"{attempt.id}"
-                ),
+                "description": ("Outstanding payment for your recent transaction."),
                 "notes": notes,
                 "notify_email": notify_email,
                 "notify_sms": notify_sms,
@@ -544,12 +545,27 @@ def _create_or_reuse_payment_link(
         )
 
     except RazorpayMCPError as exc:
-        raise RuntimeError(
-            "Razorpay MCP payment-link creation failed: "
-            f"{type(exc).__name__}: {exc}. "
-            "REST fallback is intentionally disabled after MCP "
-            "execution begins to avoid duplicate payment links."
-        ) from exc
+        error_text = str(exc)
+        lowered = error_text.lower()
+        permanent_markers = (
+            "test mode limit",
+            "limit of 30 reached",
+            "quota exceeded",
+            "not permitted",
+            "permission denied",
+            "invalid api key",
+            "authentication failed",
+            "invalid request",
+        )
+        message = (
+            "Razorpay MCP payment-link creation failed. "
+            "REST fallback is intentionally disabled after MCP execution "
+            "begins to avoid duplicate payment links. "
+            f"Provider error: {error_text}"
+        )
+        if any(marker in lowered for marker in permanent_markers):
+            raise PermanentExecutionError(message) from exc
+        raise RuntimeError(message) from exc
 
     finally:
         if mcp_client is not None:
@@ -774,9 +790,6 @@ def _make_tool(
     name: str,
     description: str,
     handler: Callable[[], ExecutionResult],
-    *,
-    action: str,
-    channel: str,
 ):
     """
     Create a Strands-compatible zero-argument tool.
@@ -791,33 +804,23 @@ def _make_tool(
     def tool_function() -> str:
         try:
             result = handler()
-
+        except PermanentExecutionError as exc:
+            result = ExecutionResult(
+                success=False,
+                status="blocked",
+                action="unknown",
+                channel="unknown",
+                provider="razorpay_mcp",
+                error=str(exc),
+            )
         except Exception as exc:
-            # The tool WAS invoked, but the external execution failed.
-            # Preserve that distinction so execute_strategy() does not
-            # misreport a provider failure as "tool not invoked".
             result = ExecutionResult(
                 success=False,
                 status="execution_failed",
-                action=action,
-                channel=channel,
-                provider=(
-                    "razorpay_mcp"
-                    if name.startswith("send_payment_link")
-                    or name.startswith("send_payment_link_reminder")
-                    else "executor_tool"
-                ),
-                error=(
-                    f"{type(exc).__name__}: {exc}"
-                ),
-            )
-
-            print(
-                "[EXECUTOR TOOL] Tool execution failed "
-                f"tool={name} "
-                f"action={action} "
-                f"channel={channel} "
-                f"error={result.error}"
+                action="unknown",
+                channel="unknown",
+                provider="executor_tool",
+                error=f"{type(exc).__name__}: {exc}",
             )
 
         execution_state["result"] = result
@@ -947,8 +950,6 @@ def execute_strategy(
         tools = [
             _make_tool(
                 name="no_action",
-                action=action,
-                channel=channel,
                 description=(
                     "Record that no recovery action should be taken. "
                     "Call exactly once."
@@ -969,8 +970,6 @@ def execute_strategy(
         tools = [
             _make_tool(
                 name="contact_support",
-                action=action,
-                channel=channel,
                 description=(
                     "Create an internal support escalation for this recovery "
                     "attempt. Call exactly once."
@@ -1010,8 +1009,6 @@ def execute_strategy(
                     "recovery attempt and notify the customer through the "
                     f"approved {channel} channel. Call exactly once."
                 ),
-                action=action,
-                channel=channel,
                 handler=lambda: _create_or_reuse_payment_link(
                     attempt,
                     decision,
@@ -1039,8 +1036,6 @@ def execute_strategy(
                     "Send a reminder for the existing Razorpay recovery "
                     "Payment Link through the approved channel. Call exactly once."
                 ),
-                action=action,
-                channel=channel,
                 handler=lambda: _execute_reminder(
                     attempt,
                     decision,
@@ -1091,7 +1086,7 @@ EXECUTION RULES:
 
     if result is None:
         raise RuntimeError(
-            "Executor Agent did not invoke the required execution tool."
+            "Executor Agent returned without invoking its execution tool."
         )
 
     if not result.success:

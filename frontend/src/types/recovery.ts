@@ -103,3 +103,8 @@ export type RecoveryEventsResponse = {
   limit: number
   offset: number
 }
+
+
+export type RecoveryEventDetail = RecoveryEvent & {
+  payload: Record<string, unknown> | null
+}

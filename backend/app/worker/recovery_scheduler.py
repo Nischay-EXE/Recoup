@@ -8,6 +8,7 @@ from app.db.recovery_models import (
 )
 from app.state.executor import execute_recovery_attempt
 from app.utils.time import utc_now
+from app.state.health import touch_scheduler_heartbeat
 
 
 # ==========================================================
@@ -240,6 +241,7 @@ def run_scheduler() -> None:
     )
 
     while True:
+        touch_scheduler_heartbeat()
         run_scheduler_once()
 
         time.sleep(

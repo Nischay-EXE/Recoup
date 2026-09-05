@@ -51,6 +51,44 @@ def close_batch(db: Session, batch_id: str) -> RecoveryBatch | None:
     return batch
 
 
+def reopen_batch(db: Session, batch_id: str) -> RecoveryBatch | None:
+    """Re-enable a completed batch as the current active assignment boundary."""
+    batch = db.query(RecoveryBatch).filter(RecoveryBatch.batch_id == batch_id).first()
+    if batch is None or batch.status == "deleted":
+        return None
+
+    active = get_active_batch(db)
+    if active is not None and active.batch_id != batch_id:
+        raise ValueError(
+            "Another active recovery batch already exists. Disable it before enabling this batch."
+        )
+
+    batch.status = "active"
+    batch.ended_at = None
+    db.commit()
+    db.refresh(batch)
+    return batch
+
+
+def delete_batch(db: Session, batch_id: str) -> RecoveryBatch | None:
+    """Soft-delete a batch boundary without deleting its audit records."""
+    batch = db.query(RecoveryBatch).filter(RecoveryBatch.batch_id == batch_id).first()
+    if batch is None or batch.status == "deleted":
+        return None
+    if batch.status == "active":
+        raise ValueError("Disable the active recovery batch before deleting it.")
+
+    # Never delete Event/Case/Attempt/Decision/Escalation rows.  The batch
+    # remains in the database as an audit tombstone and is simply hidden from
+    # the operational batch list.
+    if batch.status == "active":
+        batch.ended_at = utc_now()
+    batch.status = "deleted"
+    db.commit()
+    db.refresh(batch)
+    return batch
+
+
 def _serialize_batch(db: Session, batch: RecoveryBatch) -> dict:
     event_count = db.query(func.count(Event.id)).filter(Event.batch_id == batch.batch_id).scalar() or 0
     normalized_event_count = db.query(func.count(NormalizedEvent.id)).filter(NormalizedEvent.batch_id == batch.batch_id).scalar() or 0
@@ -87,7 +125,7 @@ def _serialize_batch(db: Session, batch: RecoveryBatch) -> dict:
 
 
 def list_batches(db: Session, *, limit: int = 20, offset: int = 0) -> dict:
-    query = db.query(RecoveryBatch)
+    query = db.query(RecoveryBatch).filter(RecoveryBatch.status != "deleted")
     total = query.with_entities(func.count(RecoveryBatch.id)).scalar() or 0
     batches = query.order_by(RecoveryBatch.started_at.desc()).offset(offset).limit(limit).all()
     return {
@@ -101,4 +139,6 @@ def list_batches(db: Session, *, limit: int = 20, offset: int = 0) -> dict:
 
 def get_batch(db: Session, batch_id: str) -> dict | None:
     batch = db.query(RecoveryBatch).filter(RecoveryBatch.batch_id == batch_id).first()
-    return _serialize_batch(db, batch) if batch else None
+    if batch is None or batch.status == "deleted":
+        return None
+    return _serialize_batch(db, batch)

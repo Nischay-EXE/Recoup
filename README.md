@@ -1,136 +1,78 @@
-# Rev Agent
+# Revenue Recovery Agent
 
-An event-driven AI system for detecting failed revenue events, understanding why they happened, deciding how to recover them, executing bounded recovery actions, and measuring the outcome.
-
-The project is built around a closed-loop recovery pipeline:
+An event-driven AI revenue recovery platform that turns payment and receivables events into controlled, auditable recovery actions — and measures the revenue actually recovered.
 
 **Detect → Understand → Decide → Guard → Execute → Observe → Correlate → Recover**
 
 ---
 
-## What the system does
+## What it does
 
-When a Razorpay payment fails, the system can automatically:
-
-1. Receive the Razorpay webhook through FastAPI.
-2. Persist the raw event and normalize it into a canonical event model.
-3. Publish the event to a Redis Stream.
-4. Build customer/payment recovery context.
-5. Associate the event with a `RecoveryCase`.
-6. Run an **Analyst Agent** to understand the failure.
-7. Run a **Strategist Agent** to propose a recovery action.
-8. Validate the proposed action using deterministic policy and capability guardrails.
-9. Create a persisted `RecoveryAttempt` for an approved executable action.
-10. Run the **Executor Agent** to perform the approved action.
-11. Create/use a Razorpay Payment Link for real recovery through supported channels.
-12. Receive the resulting Razorpay payment/outcome webhook.
-13. Correlate the outcome with the original recovery attempt.
-14. Mark the recovery successful and record the recovered amount.
-
-The important distinction is that the system does not stop at:
-
-> "AI decided to send a message."
-
-It follows the recovery through to the actual revenue outcome.
-
----
-
-# Architecture
+Revenue recovery does not end when an AI model recommends an action. This project follows the complete loop from a real revenue event to a real provider action and, finally, a correlated payment outcome.
 
 ```text
-                    REVENUE SIGNALS
-                           │
-          ┌────────────────┼────────────────┐
-          │                │                │
-   payment.failed   subscription.*    invoice.*
-          │                │                │
-          └────────────────┼────────────────┘
-                           │
-                           ▼
-                  FASTAPI WEBHOOK GATEWAY
-                           │
-                           ▼
-                       POSTGRESQL
-                 Raw + Normalized Events
-                           │
-                           ▼
-                     REDIS STREAM
-                           │
-                           ▼
-                   RECOVERY WORKER
-                           │
-                 ┌─────────┴─────────┐
-                 ▼                   ▼
-          Context Builder       Case Manager
-                 │                   │
-                 └─────────┬─────────┘
-                           ▼
-                     ANALYST AGENT
-                           │
-                           ▼
-                   STRATEGIST AGENT
-                           │
-                           ▼
-                POLICY / GUARDRAIL
-                           │
-                    ┌──────┴──────┐
-                    │             │
-                 rejected       approved
-                    │             │
-                    ▼             ▼
-                 BLOCKED    RECOVERY ATTEMPT
-                                  │
-                                  ▼
-                           EXECUTOR AGENT
-                                  │
-                         ┌────────┴────────┐
-                         ▼                 ▼
-                    RAZORPAY          COMMUNICATION
-                       API             Email / SMS
-                         │                 │
-                         └────────┬────────┘
-                                  ▼
-                           OUTCOME WEBHOOK
-                                  │
-                                  ▼
-                         CORRELATION ENGINE
-                                  │
-                                  ▼
-                           RECOVERY CASE
-                         ┌────────┴────────┐
-                         ▼                 ▼
-                     RECOVERED         UNRESOLVED
+Razorpay Revenue Event
+        ↓
+FastAPI Webhook Gateway
+        ↓
+Raw + Normalized Event
+        ↓
+Redis Stream
+        ↓
+Recovery Worker
+        ↓
+Recovery Context + Case
+        ↓
+Analyst Agent
+        ↓
+Strategist Agent
+        ↓
+Deterministic Guardrail
+        ↓
+Recovery Attempt
+        ↓
+Executor Agent
+        ↓
+Razorpay / Customer Communication
+        ↓
+Outcome Webhook
+        ↓
+Outcome Correlation
+        ↓
+Recovered Revenue
 ```
 
----
+The platform currently models three revenue objects through a common recovery engine:
 
-# Multi-Agent Architecture
+- **Payment**
+- **Invoice**
+- **Subscription**
 
-The AI layer intentionally separates analysis, strategy, and execution.
-
-## 1. Analyst Agent
-
-The Analyst examines the revenue event and available context.
-
-Its job is to answer questions such as:
-
-- What happened?
-- Why did the payment/revenue event fail?
-- What customer/payment context is relevant?
-- Is this situation potentially recoverable?
-- What information should influence the recovery strategy?
-
-The Analyst produces structured output rather than directly executing an action.
 
 ---
 
-## 2. Strategist Agent
+## Core features
 
-The Strategist receives the Analyst's structured assessment and determines the most appropriate recovery strategy.
+### Event-driven processing
 
-It considers the execution capabilities currently registered by the system.
+- Razorpay webhook ingestion through FastAPI
+- Raw webhook persistence
+- Canonical event normalization
+- Redis Streams + consumer groups for asynchronous processing
+- PostgreSQL-backed recovery state
+- Event idempotency and duplicate handling
 
-Possible actions include:
+### Multi-agent recovery
+
+The AI layer has three separate responsibilities:
+
+**Analyst Agent** — understands the failure/revenue risk, customer history, risk level, and recovery factors.
+
+**Strategist Agent** — chooses an appropriate recovery action from the available capabilities.
+
+**Executor Agent** — executes an already-approved action; it does not independently decide what should happen.
+
+Supported recovery actions include:
 
 ```text
 retry_payment
@@ -140,152 +82,163 @@ contact_support
 no_action
 ```
 
-The Strategist proposes an action.
+### Deterministic policy guardrails
 
-It does **not** get unrestricted authority to execute that action.
+AI decisions pass through deterministic validation before an executable recovery attempt is created. This protects action capabilities, channels, case state, attempt limits, and policy boundaries.
 
----
+### Real Razorpay recovery
 
-## 3. Policy / Guardrail
+The live recovery path uses Razorpay Payment Links with supported customer channels:
 
-Before an action becomes a real recovery attempt, it passes through deterministic policy validation.
+- Email
+- SMS
 
-The guardrail verifies things such as:
+Recovery attempts carry stable lineage and provider metadata so subsequent payment events can be connected back to the recovery action.
 
-- Is the action supported?
-- Is the requested channel supported for that action?
-- Is the action allowed by the current policy?
-- Has the recovery case reached its attempt limit?
-- Is the underlying payment/revenue state appropriate?
-- Would the action create an invalid or duplicate recovery attempt?
+### Razorpay Remote MCP
 
-For example:
+The project includes a dedicated Razorpay MCP capability boundary with approved tools:
 
 ```text
-send_payment_link + email
-        ↓
-      allowed
-
-send_payment_link + sms
-        ↓
-      allowed
-
-send_payment_link + whatsapp
-        ↓
-      blocked
+create_payment_link
+payment_link_notify
+fetch_all_payment_links
+fetch_payment_link
+fetch_payment
+fetch_order
 ```
 
-This prevents the LLM from bypassing execution boundaries.
+The Razorpay Remote MCP connection has been verified against Razorpay Test Mode.
 
 ---
 
-## 4. Executor Agent
+# Recovery scenarios
 
-The Executor is a real **Groq + Strands Agent**.
+## 1. Failed payment recovery
 
-Its responsibility is execution of an already-approved action.
-
-The Executor does not independently decide which recovery action should happen.
-
-Instead:
+This is the primary live-tested recovery scenario.
 
 ```text
+payment.failed
+      ↓
+Recovery Case
+      ↓
 Analyst
-   ↓
+      ↓
 Strategist
-   ↓
+      ↓
 Guardrail
-   ↓
-Approved Action
-   ↓
-Executor
-   ↓
-Real Provider Action
+      ↓
+Recovery Attempt
+      ↓
+Razorpay Payment Link
+      ↓
+Email / SMS
+      ↓
+Customer Payment
+      ↓
+payment.captured
+      ↓
+Outcome Correlation
+      ↓
+Recovered Amount
 ```
 
-This separation keeps the AI flexible while keeping execution bounded.
+The system distinguishes an AI decision, an approved attempt, execution, and the actual payment outcome.
 
 ---
 
-# Current Recovery Capabilities
+## 2. Partial invoice recovery
 
-The current action registry contains:
-
-```text
-retry_payment
-send_payment_link
-send_reminder
-contact_support
-no_action
-```
-
-Current real Payment Link delivery channels are:
-
-```text
-email
-sms
-```
-
-WhatsApp is **not** currently treated as an implemented Payment Link execution capability.
-
-Unsupported combinations are rejected by the deterministic capability/guardrail layer before an executable recovery attempt is created.
-
----
-
-# Real Razorpay Recovery
-
-The currently demonstrated recovery flow uses Razorpay Payment Links.
-
-A recovery attempt receives a stable reference:
-
-```text
-rr-attempt-{attempt_id}
-```
-
-The Payment Link also stores recovery lineage metadata such as:
-
-```text
-recovery_attempt_id
-recovery_case_id
-event_id
-```
-
-This allows a later successful payment to be correlated with the recovery action that caused it.
+A partially paid invoice with an outstanding balance becomes a recovery signal.
 
 Example:
 
 ```text
-Payment failed
-      │
-      ▼
-RecoveryAttempt #68
-      │
-      ▼
-Payment Link created
-      │
-      ▼
-Customer pays ₹1300
-      │
-      ▼
-Razorpay payment.captured
-      │
-      ▼
-Correlation
-      │
-      ▼
-RecoveryAttempt #68 = succeeded
-      │
-      ▼
-₹1300 recovered
+Invoice total       ₹3,57,000
+Payment 1           ₹1,00,000
+Payment 2           ₹1,00,000
+--------------------------------
+Recovered           ₹2,00,000
+Remaining           ₹1,57,000
+```
+
+The recovery case correctly remains open:
+
+```text
+At risk             ₹3,57,000
+Recovered           ₹2,00,000
+Remaining           ₹1,57,000
+Status              Open
+Progress            56%
+```
+
+The remaining balance is passed into the recovery pipeline, and the system can create a Payment Link/recovery reminder for the outstanding amount.
+
+Partial-payment accounting is cumulative and idempotent, so repeated webhook deliveries do not double-count recovered revenue.
+
+### Final invoice recovery
+
+When the outstanding amount is subsequently paid:
+
+```text
+invoice.paid
+      ↓
+Recovery Case correlation
+      ↓
+Recovered = invoice total
+Remaining = ₹0
+      ↓
+Case = Recovered
 ```
 
 ---
 
-# Recovery State Machine
+## 3. Subscription recovery
 
-Recovery is represented as persistent state rather than a transient LLM response.
+Subscription is a first-class revenue object throughout normalization, context building, case management, correlation, policy, and recovery processing.
 
-Important states include:
+The recovery engine handles subscription lifecycle signals such as:
+
+```text
+subscription.pending
+subscription.halted
+subscription.charged
+```
+
+Subscription recovery paths are covered by the automated end-to-end test suite and use the same recovery engine as payment and invoice recovery.
+
+---
+
+# Scheduled recovery
+
+Recovery decisions can be scheduled for later execution.
+
+```text
+AI Decision
+    ↓
+Guardrail Approved
+    ↓
+RecoveryAttempt
+    ↓
+scheduled_at
+    ↓
+Recovery Scheduler
+    ↓
+Executor
+    ↓
+Razorpay
+```
+
+The scheduler executes due attempts through the same bounded Executor path. This separates the decisions of **what to do**, **when to do it**, and **how to execute it**.
+
+---
+
+# Recovery state machine
+
+Recovery state is persisted rather than held only in agent memory.
+
+Important recovery-attempt states include:
 
 ```text
 proposed
@@ -299,585 +252,569 @@ blocked
 stopped
 ```
 
-The system distinguishes between:
-
-- a decision being proposed,
-- an action being approved,
-- an action actually being executed,
-- an execution failure,
-- a policy block,
-- a stopped/no-action decision,
-- and a successful revenue outcome.
-
-This prevents "attempted recovery" from being incorrectly counted as "successful recovery."
+This supports reliable handling of retries, policy blocks, scheduled work, escalation, duplicate outcomes, and successful recovery.
 
 ---
 
-# Reliability and Idempotency
+# Outcome correlation
 
-The worker uses Redis Streams and consumer groups for asynchronous processing.
+The system connects revenue outcomes to the recovery action that caused them.
 
-The implementation handles:
-
-### Duplicate events
-
-Duplicate webhook events are detected and safely handled.
-
-### Retryable execution failures
-
-A transient Executor failure can become:
+Correlation uses recovery lineage and revenue identifiers including:
 
 ```text
-execution_failed
+recovery_attempt_id
+recovery_case_id
+payment_id
+subscription_id
+invoice_id
+order_id
+customer_id
 ```
 
-and the same `RecoveryAttempt` can be retried.
-
-### Execution exhaustion
-
-After the configured Redis message retry limit:
+Payment Link reference IDs also carry recovery lineage, for example:
 
 ```text
-execution_failed
-        ↓
-execution_exhausted
+rr-attempt-883
 ```
 
-The message can then be acknowledged without endlessly retrying.
-
-### Unsupported capabilities
-
-Known unsupported execution paths become terminal:
-
-```text
-blocked
-```
-
-rather than entering a retry loop.
-
-### Guardrail rejection
-
-A policy rejection is persisted as a blocked recovery decision.
-
-Importantly, a guardrail rejection does **not** consume recovery-attempt capacity.
-
-### Duplicate successful outcomes
-
-Once an attempt has transitioned to:
-
-```text
-succeeded
-```
-
-a duplicate payment outcome does not transition it again.
+This allows the platform to answer **which recovery action resulted in the payment**, rather than only recording that a payment occurred.
 
 ---
 
-# Outcome Correlation
+# Invoice accounting
 
-A key part of the system is connecting a successful revenue event back to the recovery action.
-
-Correlation priority includes:
+Invoice recovery tracks the financial state explicitly:
 
 ```text
-1. recovery_attempt_id
-2. recovery_case_id
-3. payment_id
-4. order_id
-5. customer_id
+amount_at_risk
+amount_recovered
+amount_remaining
 ```
 
-For Payment Links, the recovery attempt can also be recovered from the Payment Link reference:
-
-```text
-rr-attempt-68
-```
-
-This allows the system to answer:
-
-> Which recovery action actually resulted in this payment?
-
-rather than simply recording that a payment happened.
+For partial payments, the recovered amount is cumulative and the remaining amount represents the outstanding receivable. A case stays open while money remains due and becomes recovered only when the outstanding amount reaches zero.
 
 ---
 
-# Data Model
+# Reliability
 
-The system separates event history, customer/payment history, and recovery state.
+The platform includes:
 
-Conceptually:
-
-```text
-Revenue Event
-     │
-     ├── Customer
-     ├── Order
-     └── Payment
-            │
-            ▼
-      Recovery Case
-            │
-            ├── Decision
-            │
-            └── Recovery Attempts
-                    │
-                    ▼
-                 Outcome
-                    │
-                    ▼
-             Amount Recovered
-```
-
-Historical records are preserved for auditability.
+- Webhook idempotency
+- Redis consumer groups
+- Pending-message reclamation
+- Retryable execution failures
+- Terminal execution exhaustion
+- Deterministic stopping rules
+- Deterministic escalation rules
+- Guardrail rejection before attempt creation
+- Duplicate successful-outcome protection
+- Persistent recovery attempts and decisions
+- Historical audit records
 
 ---
 
-# Technology Stack
+# Recovery batches
 
-| Component | Technology |
+Recovery events and cases can be grouped into explicit batches.
+
+A batch provides an operational boundary for:
+
+- Events
+- Recovery cases
+- Recovery attempts
+- AI decisions
+- Escalations
+- Revenue at risk
+- Recovered revenue
+
+Batch lifecycle:
+
+```text
+Create → Active → Close / Disable → Historical
+```
+
+The frontend provides batch-scoped operational views and drilldowns while preserving the underlying audit records.
+
+---
+
+# Merchant and developer portal
+
+The React frontend provides two complementary views of the platform.
+
+### Merchant
+
+- Merchant Overview
+- Recovery Cases
+- Case Detail
+- Escalations
+- Recovery Batches
+- Batch Detail
+
+### Developer
+
+- Developer Overview
+- Event Explorer
+- AI Decisions
+- AI Decision Detail
+- Execution Monitor
+- System Health
+
+### Case detail
+
+A recovery case can be inspected through:
+
+- At-risk revenue
+- Recovered revenue
+- Remaining revenue
+- Recovery progress
+- AI strategy
+- Guardrail decision
+- Execution result
+- Recovery attempts
+- Audit timeline
+
+### Batch detail
+
+Batch drilldown includes event and case exploration, normalized event data, recovery lineage, pagination/search, and batch-level recovery metrics.
+
+---
+
+# Architecture
+
+```text
+                         REVENUE SIGNALS
+                                │
+              ┌─────────────────┼─────────────────┐
+              │                 │                 │
+       payment.failed    subscription.*     invoice.*
+              │                 │                 │
+              └─────────────────┼─────────────────┘
+                                │
+                                ▼
+                     FASTAPI WEBHOOK GATEWAY
+                                │
+                    ┌───────────┴───────────┐
+                    ▼                       ▼
+                PostgreSQL              Redis Stream
+             Raw + Normalized               │
+                 Events                     ▼
+                                      Recovery Worker
+                                             │
+                              ┌──────────────┴──────────────┐
+                              ▼                             ▼
+                       Context Builder                Case Manager
+                              │                             │
+                              └──────────────┬──────────────┘
+                                             ▼
+                                       Analyst Agent
+                                             │
+                                             ▼
+                                      Strategist Agent
+                                             │
+                                             ▼
+                                    Policy / Guardrail
+                                             │
+                                    ┌────────┴────────┐
+                                    ▼                 ▼
+                                 Blocked           Approved
+                                                        │
+                                                        ▼
+                                                  Recovery Attempt
+                                                        │
+                                                        ▼
+                                                 Executor Agent
+                                                        │
+                                      ┌─────────────────┴─────────────────┐
+                                      ▼                                   ▼
+                                Razorpay MCP                         Scheduler
+                                      │                                   │
+                                      └─────────────────┬─────────────────┘
+                                                        ▼
+                                               Customer Payment /
+                                               Communication
+                                                        │
+                                                        ▼
+                                                Outcome Webhook
+                                                        │
+                                                        ▼
+                                               Correlation Engine
+                                                        │
+                                                        ▼
+                                                 Recovery Case
+                                                        │
+                                      ┌─────────────────┴─────────────────┐
+                                      ▼                                   ▼
+                                  Recovered                       Open / Escalated
+```
+
+---
+
+# Technology stack
+
+| Layer | Technology |
 |---|---|
-| Language | Python |
+| Backend | Python |
 | API | FastAPI |
 | Database | PostgreSQL |
 | ORM | SQLAlchemy |
+| Migrations | Alembic |
 | Queue | Redis Streams |
-| Payment Platform | Razorpay |
-| LLM Provider | Groq |
+| AI Provider | Groq |
 | Agent Framework | Strands |
+| Payment Platform | Razorpay |
+| External Tool Boundary | Razorpay Remote MCP |
+| Frontend | React + TypeScript |
+| Build Tool | Vite |
+| Data Fetching | React Query |
+| Charts | Recharts |
+| UI | Tailwind CSS + Lucide |
 | Infrastructure | Docker Compose |
-| Database Migrations | Alembic |
 
 ---
 
-# Project Structure
+# Project structure
 
 ```text
 revenue-recovery-agent/
 ├── backend/
 │   ├── alembic/
+│   │   └── versions/
 │   ├── app/
 │   │   ├── agent/
+│   │   │   ├── analyst_agent.py
+│   │   │   ├── strategist_agent.py
+│   │   │   └── executor_agent.py
 │   │   ├── api/
-│   │   ├── clients/
 │   │   ├── db/
+│   │   ├── mcp/
 │   │   ├── normalization/
 │   │   ├── queue/
 │   │   ├── state/
 │   │   └── worker/
+│   │       ├── recovery_worker.py
+│   │       └── recovery_scheduler.py
+│   ├── scripts/
 │   ├── tests/
 │   └── requirements.txt
+├── frontend/
+│   └── src/
+│       ├── components/
+│       ├── features/
+│       ├── layouts/
+│       └── types/
 ├── docker-compose.yml
 └── README.md
 ```
 
 ---
 
-# Running Locally
+# API surface
 
-## 1. Start infrastructure
+### Webhooks
+
+```text
+POST /webhooks/razorpay
+```
+
+### Recovery
+
+```text
+GET /recovery/metrics
+GET /recovery/metrics/breakdowns
+GET /recovery/cases
+GET /recovery/cases/{case_id}/timeline
+GET /recovery/cases/{case_id}/escalation
+PATCH /recovery/cases/{case_id}/escalation/assignment
+POST /recovery/cases/{case_id}/escalation/notes
+POST /recovery/cases/{case_id}/escalation/resolve
+GET /recovery/events
+GET /recovery/events/{event_id}
+```
+
+### Batches
+
+```text
+GET /recovery/batches
+POST /recovery/batches
+GET /recovery/batches/{batch_id}
+POST /recovery/batches/{batch_id}/close
+POST /recovery/batches/{batch_id}/open
+DELETE /recovery/batches/{batch_id}
+```
+
+---
+
+# Testing and validation
+
+The repository contains automated coverage for the major platform components and recovery paths, including:
+
+- Event normalization
+- Webhook idempotency
+- Recovery case creation
+- Recovery state machine
+- Payment recovery
+- Invoice recovery
+- Invoice partial-payment recovery
+- Subscription recovery
+- Analyst Agent
+- Analyst output validation
+- Strategist Agent
+- Deterministic guardrails
+- Stopping rules
+- Escalation rules
+- Recovery scheduling
+- Worker scheduling
+- Redis retry and exhaustion behavior
+- Executor behavior and retry handling
+- Razorpay MCP
+- Recovery APIs
+- Audit history
+- Metrics and metric breakdowns
+- CORS
+
+## Live-validated scenarios
+
+The current implementation has been exercised against a real Razorpay **Test Mode** account for:
+
+### Payment recovery
+
+```text
+payment.failed
+→ Analyst
+→ Strategist
+→ Guardrail approval
+→ Razorpay Payment Link
+→ Email/SMS
+→ Customer payment
+→ Successful recovery
+```
+
+### Scheduled recovery
+
+```text
+Recovery decision
+→ scheduled RecoveryAttempt
+→ Recovery Scheduler
+→ Razorpay MCP
+→ customer SMS / payment link
+```
+
+### Invoice partial-payment recovery
+
+```text
+Invoice
+→ partial payment
+→ invoice.partially_paid
+→ RecoveryCase
+→ cumulative recovered amount
+→ remaining balance
+→ AI recovery strategy
+→ guardrail
+→ Razorpay Payment Link
+```
+
+### Invoice final recovery
+
+```text
+Partial invoice recovery
+→ remaining amount paid
+→ invoice.paid
+→ outcome correlation
+→ full recovered amount
+→ RecoveryCase = recovered
+```
+
+### Razorpay MCP
+
+The Razorpay Remote MCP connection has been verified and the approved capabilities are discoverable from the project.
+
+---
+
+# Local development
+
+## Prerequisites
+
+- Docker / Docker Compose
+- Python / Conda environment
+- Node.js and npm
+- Razorpay Test Mode credentials
+- Groq API key
+
+## 1. Clone
+
+```powershell
+git clone https://github.com/Nischay-EXE/revenue-recovery-agent.git
+cd revenue-recovery-agent
+```
+
+## 2. Start infrastructure
 
 ```powershell
 docker compose up -d
 ```
 
-The project uses PostgreSQL and Redis.
-
-## 2. Configure environment
-
-From the backend directory:
+## 3. Configure backend
 
 ```powershell
 cd backend
 copy .env.example .env
 ```
 
-Configure the required credentials and settings inside `.env`.
-The Docker Compose PostgreSQL password is read from the `POSTGRES_PASSWORD` environment variable; do not put real credentials in source control.
+Configure the required environment variables in `.env`.
 
-## 3. Install backend dependencies
-
-```powershell
-pip install -r requirements.txt
-```
-
-## 4. Apply database migrations
+## 4. Start FastAPI
 
 ```powershell
-alembic upgrade head
+conda activate revenue-recovery
+uvicorn app.main:app --reload
 ```
 
-Alembic owns the database schema. Do not use `docker compose down -v` to reset development data.
+## 5. Start the Recovery Worker
 
-## 5. Start FastAPI
-
-```powershell
-uvicorn app.main:app --reload --port 8000
-```
-
-## 6. Start the Recovery Worker
-
-Open another terminal:
+In another terminal:
 
 ```powershell
 cd backend
+conda activate revenue-recovery
 python -m app.worker.recovery_worker
 ```
 
-## 7. Run tests
+## 6. Start the Recovery Scheduler
 
-From `backend`:
+In another terminal:
 
 ```powershell
-pytest -q
+cd backend
+conda activate revenue-recovery
+python -m app.worker.recovery_scheduler
+```
+
+## 7. Start the frontend
+
+```powershell
+cd frontend
+npm install
+npm run dev
 ```
 
 ---
 
-# Recovery Batches
+# Environment configuration
 
-A recovery batch is a reporting and investigation boundary for a new run. Starting a batch does **not** delete historical data.
+Use `backend/.env.example` as the configuration template.
 
-- The main dashboard remains all-time.
-- New ingested events are associated with the active batch.
-- Recovery cases, attempts, decisions, and escalations inherit that batch.
-- Batch detail exposes metrics plus drill-down into events and cases.
-- Close a batch when the run is complete.
+Typical configuration includes:
 
-This allows a clean demo or E2E window while preserving the full audit history.
+```text
+DATABASE_URL
+GROQ_API_KEY
+RAZORPAY_KEY_ID
+RAZORPAY_KEY_SECRET
+RAZORPAY_WEBHOOK_SECRET
+RAZORPAY_MCP_URL
+REDIS_URL
+```
+
+Keep `.env` local. API keys, webhook secrets, and other credentials must never be committed to the repository.
 
 ---
 
-# Webhook Flow
+# Demo flow
 
-The Razorpay webhook enters through:
+A strong product demonstration can show the complete closed loop.
 
-```text
-POST /webhooks/razorpay
-```
-
-The webhook layer:
-
-1. Validates the Razorpay signature.
-2. Checks for duplicate events.
-3. Stores the raw event.
-4. Normalizes the event.
-5. Synchronizes relevant history.
-6. Stores the normalized event.
-7. Commits the database transaction.
-8. Publishes the event to Redis.
-
-The worker then processes the event asynchronously.
-
----
-
-# Supported Payment Event Flow
-
-The currently strongest end-to-end scenario is:
+### Payment
 
 ```text
-Razorpay
-   │
-   │ payment.failed
-   ▼
-FastAPI
-   │
-   ▼
-PostgreSQL
-   │
-   ▼
-Redis Stream
-   │
-   ▼
-Recovery Worker
-   │
-   ▼
-Recovery Context
-   │
-   ▼
-Analyst Agent
-   │
-   ▼
-Strategist Agent
-   │
-   ▼
-Policy Guardrail
-   │
-   ▼
-RecoveryAttempt
-   │
-   ▼
-Executor Agent
-   │
-   ▼
-Razorpay Payment Link
-   │
-   ▼
-Email / SMS
-   │
-   ▼
-Customer Payment
-   │
-   ▼
-Razorpay payment.captured
-   │
-   ▼
-Outcome Correlation
-   │
-   ▼
-RecoveryAttempt = succeeded
-   │
-   ▼
-Amount Recovered
-```
-
----
-
-# Product Direction
-
-The recovery engine is being generalized around three revenue objects:
-
-```text
-Payment
-Subscription
-Invoice
-```
-
-The goal is to use the same underlying recovery engine rather than building three unrelated systems.
-
-## Scenario 1 — Payment Degradation → Recovery
-
-**Current hero scenario.**
-
-```text
-payment.failed
-      ↓
-failure analysis
-      ↓
-recovery strategy
-      ↓
-guardrail
-      ↓
-Payment Link / recovery action
-      ↓
-customer pays
-      ↓
-recovered amount
-```
-
-## Scenario 2 — Failed Subscription Recovery
-
-The next major scenario is subscription recovery.
-
-The architecture will use subscription lifecycle events to identify situations such as failed recurring charges and subscriptions entering pending/halted states.
-
-```text
-Subscription Event
-       ↓
-Context
-       ↓
-Analysis
-       ↓
-Strategy
-       ↓
-Guardrail
-       ↓
-Recovery Action
-       ↓
-Outcome
-```
-
-Subscription recovery is a target product scenario and should not be interpreted as fully implemented merely because it appears in the architecture.
-
-## Scenario 3 — Invoice / B2B Receivables Recovery
-
-The third core scenario is invoice and B2B receivables recovery.
-
-The engine can eventually handle:
-
-```text
-Invoice issued
-      ↓
-Invoice overdue / partially paid
-      ↓
-Receivables context
-      ↓
+Payment failure
+   ↓
+AI analysis
+   ↓
 Recovery strategy
-      ↓
-Reminder / payment link / escalation
-      ↓
-Payment
-      ↓
-Recovered amount
-```
-
-Promise-to-pay is intended to be a capability inside this receivables workflow rather than a separate recovery engine.
-
----
-
-# Planned Extensions
-
-The architecture is designed to evolve toward:
-
-- Generalized Payment / Subscription / Invoice events
-- Subscription recovery
-- Invoice / B2B receivables recovery
-- Promise-to-pay workflows
-- Scheduled and delayed recovery actions
-- Explicit stopping rules
-- Escalation workflows
-- Batch recovery metrics
-- Audit timelines
-- Broader MCP capability integration
-- Product frontend and recovery dashboards
-
-These features should be considered **planned unless supported by the current implementation**.
-
----
-
-# MCP Direction
-
-MCP is intended to provide a clean capability boundary around external tools and services.
-
-The architecture should not duplicate existing Razorpay functionality unnecessarily.
-
-The intended direction is:
-
-```text
-Recovery Engine
-      │
-      ▼
-Capability Boundary
-      │
- ┌────┴─────────────┐
- ▼                  ▼
-Razorpay MCP     Recovery Tools
-supported        subscription/
-operations       invoice/case/
-                 policy/scheduling
-```
-
-The MCP layer is an extension point, not a replacement for the current recovery services.
-
----
-
-# Design Principles
-
-## 1. AI proposes; deterministic systems constrain
-
-LLMs handle reasoning-intensive tasks such as analysis and strategy.
-
-Deterministic code controls what can actually happen.
-
-## 2. Execution is bounded
-
-An approved strategy must correspond to a registered execution capability.
-
-The Executor cannot arbitrarily invent an unsupported tool or channel.
-
-## 3. Recovery is a state machine
-
-A recovery action has a persistent lifecycle.
-
-This makes retries, failures, stopping, and successful outcomes explicit.
-
-## 4. Outcomes matter
-
-Sending a payment link is not the same as recovering revenue.
-
-The system therefore tracks:
-
-```text
-Action
-  ↓
-Execution
-  ↓
-Payment Outcome
-  ↓
-Amount Recovered
-```
-
-## 5. Auditability matters
-
-The system preserves the recovery journey:
-
-```text
-Event
-  ↓
-Context
-  ↓
-Analysis
-  ↓
-Strategy
-  ↓
+   ↓
 Guardrail
-  ↓
-Attempt
-  ↓
-Execution
-  ↓
-Outcome
-  ↓
-Recovered Amount
+   ↓
+Razorpay recovery action
+   ↓
+Customer payment
+   ↓
+Recovered revenue
 ```
 
-This allows an individual recovery case to be inspected end-to-end.
+### Partial invoice
+
+```text
+Invoice
+   ↓
+Partial payment
+   ↓
+Recovered + Remaining
+   ↓
+Recovery Case stays open
+   ↓
+AI recovery action
+   ↓
+Remaining payment
+   ↓
+Recovered
+```
+
+### Operational visibility
+
+```text
+Merchant Overview
+      ↓
+Recovery Cases
+      ↓
+Case Detail
+      ↓
+AI Decision
+      ↓
+Guardrail
+      ↓
+Execution
+      ↓
+Outcome
+      ↓
+Recovered Revenue
+```
 
 ---
 
-# Demo Goal
+# Design principles
 
-The eventual batch-level product demonstration should answer:
+### AI proposes; deterministic systems control
 
-```text
-100 revenue-risk cases
+LLMs handle reasoning-intensive analysis and strategy. Policy, capabilities, state transitions, and execution boundaries remain deterministic.
 
-₹X total revenue at risk
+### Execution is bounded
 
-₹Y actually recovered
+Agents execute only through registered capabilities that have passed policy validation.
 
-Recovery rate: XX%
+### Revenue outcomes are first-class
 
-Automatically recovered: XX
-Escalated: XX
-Stopped by policy: XX
-Still outstanding: XX
-```
+A generated decision or sent payment link is not counted as recovered revenue until the corresponding outcome is observed and correlated.
 
-An individual case should be drillable:
+### Recovery is persistent
 
-```text
-Recovery Case
-     ↓
-Revenue Event
-     ↓
-Customer / Payment Context
-     ↓
-Analyst
-     ↓
-Strategist
-     ↓
-Capabilities
-     ↓
-Guardrail
-     ↓
-Recovery Attempt
-     ↓
-Executor
-     ↓
-Razorpay
-     ↓
-Outcome
-     ↓
-Amount Recovered
-     ↓
-Final Case State
-```
+Cases, decisions, attempts, executions, outcomes, and financial amounts are persisted in PostgreSQL.
 
-The key product metric is therefore not simply:
+### Auditability by default
 
-> "How many AI decisions were generated?"
+The system preserves the journey from event to decision to execution to outcome.
 
-It is:
+### One engine, multiple revenue objects
+
+Payment, subscription, and invoice recovery reuse the same event, context, case, policy, execution, scheduling, correlation, and outcome architecture.
+
+---
+
+# Product direction
+
+The current implementation establishes the core revenue recovery engine. The architecture is designed to expand the same engine with additional recovery capabilities and revenue workflows rather than creating isolated systems.
+
+The central product metric is:
 
 > **How much revenue was actually recovered?**
 
@@ -885,6 +822,4 @@ It is:
 
 # Repository
 
-GitHub:
-
-https://github.com/Nischay-EXE/revenue-recovery-agent
+GitHub: https://github.com/Nischay-EXE/revenue-recovery-agent

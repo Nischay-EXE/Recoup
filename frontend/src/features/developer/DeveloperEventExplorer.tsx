@@ -18,6 +18,7 @@ import {
 } from "../events/eventApi"
 import type { RecoveryEvent } from "../../types/recovery"
 import { formatDateTime } from "../../lib/formatters"
+import BatchSelector from "../../components/filters/BatchSelector"
 
 const PAGE_SIZE = 25
 
@@ -37,7 +38,6 @@ function formatAmount(
 
   return `${amount.toLocaleString()} ${currency ?? ""}`.trim()
 }
-
 
 function shortId(value: string | null | undefined) {
   if (!value) return "—"
@@ -64,10 +64,7 @@ function eventStatusClass(eventType: string) {
     return "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
   }
 
-  if (
-    eventType.includes("pending") ||
-    eventType.includes("created")
-  ) {
+  if (eventType.includes("pending") || eventType.includes("created")) {
     return "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"
   }
 
@@ -76,18 +73,18 @@ function eventStatusClass(eventType: string) {
 
 function objectBadgeClass(objectType: string) {
   if (objectType === "payment") {
-    return "bg-emerald-950/70 text-emerald-300 ring-1 ring-inset ring-emerald-800"
+    return "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200 dark:bg-emerald-950/70 dark:text-emerald-300 dark:ring-emerald-800"
   }
 
   if (objectType === "subscription") {
-    return "bg-blue-950/70 text-blue-300 ring-1 ring-inset ring-blue-800"
+    return "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200 dark:bg-blue-950/70 dark:text-blue-300 dark:ring-blue-800"
   }
 
   if (objectType === "invoice") {
-    return "bg-violet-950/70 text-violet-300 ring-1 ring-inset ring-violet-800"
+    return "bg-violet-50 text-violet-700 ring-1 ring-inset ring-violet-200 dark:bg-violet-950/70 dark:text-violet-300 dark:ring-violet-800"
   }
 
-  return "bg-slate-800 text-slate-300 ring-1 ring-inset ring-slate-700"
+  return "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700"
 }
 
 function revenueObject(event: RecoveryEvent) {
@@ -110,12 +107,13 @@ function DetailValue({
   mono?: boolean
 }) {
   return (
-    <div className="min-w-0 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+    <div className="min-w-0 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/70">
       <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
         {label}
       </p>
+
       <p
-        className={`mt-1 break-all text-xs text-slate-200 ${
+        className={`mt-1 break-all text-xs text-slate-700 dark:text-slate-200 ${
           mono ? "font-mono" : ""
         }`}
       >
@@ -135,6 +133,7 @@ function EventDetailDialog({
   const navigate = useNavigate()
   const normalized = event.normalized
   const objectType = revenueObject(event)
+
   const primaryId =
     normalized?.payment_id ??
     normalized?.subscription_id ??
@@ -143,22 +142,26 @@ function EventDetailDialog({
 
   function openCase() {
     if (!event.recovery_case?.case_id) return
+
     onClose()
     navigate(`/merchant/cases/${event.recovery_case.case_id}`)
   }
 
   function openDecision() {
     if (!event.recovery_case?.case_id) return
+
     onClose()
     navigate(`/developer/decisions/${event.recovery_case.case_id}`)
   }
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm dark:bg-slate-950/70"
       role="presentation"
       onMouseDown={(mouseEvent) => {
-        if (mouseEvent.target === mouseEvent.currentTarget) onClose()
+        if (mouseEvent.target === mouseEvent.currentTarget) {
+          onClose()
+        }
       }}
     >
       <motion.div
@@ -168,9 +171,9 @@ function EventDetailDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="event-detail-title"
-        className="max-h-[88vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl"
+        className="max-h-[88vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900"
       >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span
@@ -180,6 +183,7 @@ function EventDetailDialog({
               >
                 {objectType}
               </span>
+
               <span
                 className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${eventStatusClass(
                   event.event_type,
@@ -188,12 +192,14 @@ function EventDetailDialog({
                 {normalized?.status ?? event.event_type}
               </span>
             </div>
+
             <h2
               id="event-detail-title"
-              className="mt-2 truncate text-lg font-semibold text-white"
+              className="mt-2 truncate text-lg font-semibold text-slate-900 dark:text-white"
             >
               {event.event_type}
             </h2>
+
             <p
               className="mt-1 break-all font-mono text-[11px] text-slate-500"
               title={event.event_id}
@@ -206,7 +212,7 @@ function EventDetailDialog({
             type="button"
             onClick={onClose}
             aria-label="Close event details"
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-700 text-slate-400 transition hover:bg-slate-800 hover:text-white"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
           >
             <X className="h-4 w-4" />
           </button>
@@ -215,34 +221,50 @@ function EventDetailDialog({
         <div className="max-h-[calc(88vh-76px)] overflow-y-auto p-5">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <DetailValue label="Source" value={event.source} />
-            <DetailValue label="Received" value={formatDateTime(event.received_at)} />
+
+            <DetailValue
+              label="Received"
+              value={formatDateTime(event.received_at)}
+            />
+
             <DetailValue
               label="Occurred"
               value={formatDateTime(normalized?.occurred_at)}
             />
+
             <DetailValue
               label="Revenue object"
-              value={primaryId ? `${objectType} · ${primaryId}` : "Not resolved"}
+              value={
+                primaryId
+                  ? `${objectType} · ${primaryId}`
+                  : "Not resolved"
+              }
               mono={Boolean(primaryId)}
             />
+
             <DetailValue
               label="Customer"
               value={normalized?.customer_id ?? "Not available"}
               mono={Boolean(normalized?.customer_id)}
             />
+
             <DetailValue
               label="Amount"
-              value={formatAmount(normalized?.amount, normalized?.currency)}
+              value={formatAmount(
+                normalized?.amount,
+                normalized?.currency,
+              )}
             />
           </div>
 
-          <section className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
+          <section className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/50">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
                   Recovery lineage
                 </p>
-                <p className="mt-1 text-sm font-medium text-white">
+
+                <p className="mt-1 text-sm font-medium text-slate-900 dark:text-white">
                   {event.recovery_case
                     ? "This event is linked to a recovery case."
                     : event.recovery_case_match === "ambiguous"
@@ -254,10 +276,10 @@ function EventDetailDialog({
               <span
                 className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
                   event.recovery_case_match === "exact"
-                    ? "bg-emerald-950/60 text-emerald-300"
+                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
                     : event.recovery_case_match === "ambiguous"
-                      ? "bg-amber-950/60 text-amber-300"
-                      : "bg-slate-800 text-slate-400"
+                      ? "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
+                      : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
                 }`}
               >
                 {event.recovery_case_match === "exact"
@@ -275,10 +297,12 @@ function EventDetailDialog({
                   value={event.recovery_case.case_id}
                   mono
                 />
+
                 <DetailValue
                   label="Case status"
                   value={event.recovery_case.status}
                 />
+
                 <DetailValue
                   label="At risk"
                   value={formatAmount(
@@ -286,6 +310,7 @@ function EventDetailDialog({
                     normalized?.currency,
                   )}
                 />
+
                 <DetailValue
                   label="Recovered"
                   value={formatAmount(
@@ -304,30 +329,35 @@ function EventDetailDialog({
                   className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-500"
                 >
                   Open recovery case
+
                   <ArrowUpRight className="h-3.5 w-3.5" />
                 </button>
+
                 <button
                   type="button"
                   onClick={openDecision}
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-800"
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                 >
                   Open AI decision trace
+
                   <ArrowUpRight className="h-3.5 w-3.5" />
                 </button>
               </div>
             )}
           </section>
 
-          <section className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
+          <section className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/50">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
                   Normalized event
                 </p>
-                <p className="mt-1 text-sm font-medium text-white">
+
+                <p className="mt-1 text-sm font-medium text-slate-900 dark:text-white">
                   Canonical revenue context persisted by the recovery engine.
                 </p>
               </div>
+
               <span className="text-xs text-slate-500">
                 {event.payload_available
                   ? "Raw payload available"
@@ -336,11 +366,11 @@ function EventDetailDialog({
             </div>
 
             {normalized ? (
-              <pre className="mt-4 overflow-x-auto rounded-xl border border-slate-800 bg-slate-950 p-4 font-mono text-[11px] leading-5 text-slate-300">
+              <pre className="mt-4 overflow-x-auto rounded-xl border border-slate-200 bg-white p-4 font-mono text-[11px] leading-5 text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
                 {JSON.stringify(normalized, null, 2)}
               </pre>
             ) : (
-              <p className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs text-slate-500">
+              <p className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 This event does not have a normalized record available.
               </p>
             )}
@@ -373,14 +403,14 @@ function EventRow({
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       onClick={() => onOpen(event)}
-      className="group grid w-full grid-cols-[minmax(240px,1.5fr)_130px_minmax(180px,1fr)_150px_130px] gap-4 border-t border-slate-800 px-5 py-4 text-left transition hover:bg-slate-800/45 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 first:border-t-0"
+      className="group grid w-full grid-cols-[minmax(240px,1.5fr)_130px_minmax(180px,1fr)_150px_130px] gap-4 border-t border-slate-200 px-5 py-4 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 dark:border-slate-800 dark:hover:bg-slate-800/45 first:border-t-0"
       aria-label={`Open details for ${event.event_type}`}
     >
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <CircleDot className="h-3.5 w-3.5 shrink-0 text-slate-500 transition group-hover:text-blue-400" />
+          <CircleDot className="h-3.5 w-3.5 shrink-0 text-slate-400 transition group-hover:text-blue-500 dark:text-slate-500 dark:group-hover:text-blue-400" />
 
-          <span className="truncate text-sm font-medium text-slate-100">
+          <span className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
             {event.event_type}
           </span>
         </div>
@@ -405,14 +435,14 @@ function EventRow({
 
       <div className="min-w-0">
         <p
-          className="truncate font-mono text-xs text-slate-400"
+          className="truncate font-mono text-xs text-slate-600 dark:text-slate-400"
           title={primaryId ?? undefined}
         >
           {primaryId ? shortId(primaryId) : "No revenue object ID"}
         </p>
 
         <p
-          className="mt-1 truncate font-mono text-xs text-slate-600"
+          className="mt-1 truncate font-mono text-xs text-slate-500 dark:text-slate-600"
           title={normalized?.customer_id ?? undefined}
         >
           {normalized?.customer_id
@@ -422,8 +452,11 @@ function EventRow({
       </div>
 
       <div>
-        <p className="text-sm font-medium text-slate-100">
-          {formatAmount(normalized?.amount, normalized?.currency)}
+        <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+          {formatAmount(
+            normalized?.amount,
+            normalized?.currency,
+          )}
         </p>
 
         <p className="mt-1 text-xs text-slate-500">
@@ -435,7 +468,8 @@ function EventRow({
         <p className="text-xs text-slate-500">
           {formatDateTime(event.received_at)}
         </p>
-        <p className="mt-1 text-[10px] font-medium text-blue-400 opacity-0 transition group-hover:opacity-100">
+
+        <p className="mt-1 text-[10px] font-medium text-blue-600 opacity-0 transition group-hover:opacity-100 dark:text-blue-400">
           View details →
         </p>
       </div>
@@ -447,35 +481,55 @@ export default function DeveloperEventExplorer() {
   const [search, setSearch] = useState("")
   const [eventType, setEventType] = useState("")
   const [revenueObjectType, setRevenueObjectType] = useState("")
+  const [batchId, setBatchId] = useState("")
   const [page, setPage] = useState(0)
-  const [selectedEvent, setSelectedEvent] = useState<RecoveryEvent | null>(
-    null,
-  )
+  const [selectedEvent, setSelectedEvent] =
+    useState<RecoveryEvent | null>(null)
 
   const params = useMemo<EventExplorerParams>(
     () => ({
       search: search.trim() || undefined,
       eventType: eventType || undefined,
       revenueObjectType: revenueObjectType || undefined,
+      batchId: batchId || undefined,
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
     }),
-    [search, eventType, revenueObjectType, page],
+    [
+      search,
+      eventType,
+      revenueObjectType,
+      batchId,
+      page,
+    ],
   )
 
-  const { data, isLoading, isError, refetch } = useQuery({
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: ["recovery-events", params],
     queryFn: () => getRecoveryEvents(params),
   })
 
-  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE))
+  const totalPages = Math.max(
+    1,
+    Math.ceil((data?.total ?? 0) / PAGE_SIZE),
+  )
 
-  const hasFilters = search.trim() || eventType || revenueObjectType
+  const hasFilters =
+    search.trim() ||
+    eventType ||
+    revenueObjectType ||
+    batchId
 
   function clearFilters() {
     setSearch("")
     setEventType("")
     setRevenueObjectType("")
+    setBatchId("")
     setPage(0)
   }
 
@@ -494,32 +548,36 @@ export default function DeveloperEventExplorer() {
       <div>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-sm font-medium text-blue-400">Developer Console</p>
+            <p className="text-sm font-medium text-blue-600 dark:text-blue-400">
+              Developer Console
+            </p>
 
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900 dark:text-white">
               Event Explorer
             </h1>
 
-            <p className="mt-2 max-w-2xl text-sm text-slate-400">
+            <p className="mt-2 max-w-2xl text-sm text-slate-500 dark:text-slate-400">
               Inspect persisted revenue events and their normalized payment,
               subscription, and invoice context.
             </p>
           </div>
 
-          <div className="rounded-xl border border-slate-800 bg-slate-900 px-4 py-3">
-            <p className="text-xs text-slate-500">Persisted events</p>
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-xs text-slate-500">
+              Persisted events
+            </p>
 
-            <p className="mt-1 text-xl font-semibold text-white">
+            <p className="mt-1 text-xl font-semibold text-slate-900 dark:text-white">
               {data?.total?.toLocaleString("en-IN") ?? "—"}
             </p>
           </div>
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-sm">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-col gap-3 lg:flex-row">
           <div className="relative min-w-0 flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 dark:text-slate-500" />
 
             <input
               value={search}
@@ -528,24 +586,44 @@ export default function DeveloperEventExplorer() {
                 setPage(0)
               }}
               placeholder="Search event, customer, payment, order, subscription or invoice..."
-              className="h-10 w-full rounded-xl border border-slate-700 bg-slate-950 pl-9 pr-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:placeholder:text-slate-600"
             />
           </div>
 
-          <div className="flex items-center gap-2">
-            <Filter className="h-4 w-4 text-slate-500" />
+          <div className="flex flex-wrap items-center gap-2">
+            <Filter className="h-4 w-4 text-slate-400 dark:text-slate-500" />
+
+            <BatchSelector
+              value={batchId}
+              onChange={(value) => {
+                setBatchId(value)
+                setPage(0)
+              }}
+            />
 
             <select
               value={eventType}
-              onChange={(event) => changeEventType(event.target.value)}
-              className="h-10 rounded-xl border border-slate-700 bg-slate-950 px-3 text-sm text-slate-300 outline-none"
+              onChange={(event) =>
+                changeEventType(event.target.value)
+              }
+              className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300"
             >
               <option value="">All event types</option>
-              <option value="payment.failed">payment.failed</option>
-              <option value="payment.captured">payment.captured</option>
-              <option value="subscription.pending">subscription.pending</option>
-              <option value="subscription.charged">subscription.charged</option>
-              <option value="invoice.paid">invoice.paid</option>
+              <option value="payment.failed">
+                payment.failed
+              </option>
+              <option value="payment.captured">
+                payment.captured
+              </option>
+              <option value="subscription.pending">
+                subscription.pending
+              </option>
+              <option value="subscription.charged">
+                subscription.charged
+              </option>
+              <option value="invoice.paid">
+                invoice.paid
+              </option>
             </select>
 
             <select
@@ -553,19 +631,27 @@ export default function DeveloperEventExplorer() {
               onChange={(event) =>
                 changeRevenueObjectType(event.target.value)
               }
-              className="h-10 rounded-xl border border-slate-700 bg-slate-950 px-3 text-sm text-slate-300 outline-none"
+              className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300"
             >
-              <option value="">All revenue objects</option>
-              <option value="payment">Payment</option>
-              <option value="subscription">Subscription</option>
-              <option value="invoice">Invoice</option>
+              <option value="">
+                All revenue objects
+              </option>
+              <option value="payment">
+                Payment
+              </option>
+              <option value="subscription">
+                Subscription
+              </option>
+              <option value="invoice">
+                Invoice
+              </option>
             </select>
 
             {hasFilters && (
               <button
                 type="button"
                 onClick={clearFilters}
-                className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-slate-700 px-3 text-sm text-slate-300 transition hover:bg-slate-800"
+                className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-sm text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
               >
                 <X className="h-4 w-4" />
                 Clear
@@ -575,49 +661,59 @@ export default function DeveloperEventExplorer() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-sm">
-        <div className="grid grid-cols-[minmax(240px,1.5fr)_130px_minmax(180px,1fr)_150px_130px] gap-4 bg-slate-950 px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="grid grid-cols-[minmax(240px,1.5fr)_130px_minmax(180px,1fr)_150px_130px] gap-4 bg-slate-50 px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:bg-slate-950 dark:text-slate-500">
           <span>Event</span>
           <span>Object</span>
           <span>Revenue context</span>
           <span>Amount / status</span>
-          <span className="text-right">Received</span>
+          <span className="text-right">
+            Received
+          </span>
         </div>
 
         {isLoading && (
           <div className="space-y-3 p-5">
-            {Array.from({ length: 8 }).map((_, index) => (
-              <div
-                key={index}
-                className="h-14 animate-pulse rounded-xl bg-slate-800"
-              />
-            ))}
+            {Array.from({ length: 8 }).map(
+              (_, index) => (
+                <div
+                  key={index}
+                  className="h-14 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-800"
+                />
+              ),
+            )}
           </div>
         )}
 
         {isError && !isLoading && (
           <div className="p-10 text-center">
-            <p className="text-sm font-medium text-white">Could not load events.</p>
+            <p className="text-sm font-medium text-slate-900 dark:text-white">
+              Could not load events.
+            </p>
 
             <button
               type="button"
               onClick={() => refetch()}
-              className="mt-3 rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-900"
+              className="mt-3 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100"
             >
               Try again
             </button>
           </div>
         )}
 
-        {!isLoading && !isError && data?.items.length === 0 && (
-          <div className="p-10 text-center">
-            <p className="text-sm font-medium text-white">No events found.</p>
+        {!isLoading &&
+          !isError &&
+          data?.items.length === 0 && (
+            <div className="p-10 text-center">
+              <p className="text-sm font-medium text-slate-900 dark:text-white">
+                No events found.
+              </p>
 
-            <p className="mt-1 text-sm text-slate-500">
-              Try changing the search or filters.
-            </p>
-          </div>
-        )}
+              <p className="mt-1 text-sm text-slate-500">
+                Try changing the search or filters.
+              </p>
+            </div>
+          )}
 
         {!isLoading &&
           !isError &&
@@ -629,7 +725,7 @@ export default function DeveloperEventExplorer() {
             />
           ))}
 
-        <div className="flex items-center justify-between border-t border-slate-800 px-5 py-3">
+        <div className="flex items-center justify-between border-t border-slate-200 px-5 py-3 dark:border-slate-800">
           <p className="text-xs text-slate-500">
             {data?.total
               ? `${data.offset + 1}–${Math.min(
@@ -644,14 +740,16 @@ export default function DeveloperEventExplorer() {
               type="button"
               disabled={page === 0}
               onClick={() =>
-                setPage((current) => Math.max(0, current - 1))
+                setPage((current) =>
+                  Math.max(0, current - 1),
+                )
               }
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
 
-            <span className="min-w-16 text-center text-xs font-medium text-slate-400">
+            <span className="min-w-16 text-center text-xs font-medium text-slate-500 dark:text-slate-400">
               Page {page + 1} / {totalPages}
             </span>
 
@@ -659,9 +757,14 @@ export default function DeveloperEventExplorer() {
               type="button"
               disabled={page + 1 >= totalPages}
               onClick={() =>
-                setPage((current) => Math.min(totalPages - 1, current + 1))
+                setPage((current) =>
+                  Math.min(
+                    totalPages - 1,
+                    current + 1,
+                  ),
+                )
               }
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
             >
               <ChevronRight className="h-4 w-4" />
             </button>

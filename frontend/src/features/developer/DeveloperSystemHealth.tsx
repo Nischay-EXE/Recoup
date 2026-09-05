@@ -14,12 +14,23 @@ import {
 
 import { apiGet } from "../../lib/api"
 
-type HealthResponse = Record<string, unknown>
+type HealthComponent = {
+  status: "healthy" | "unavailable" | "configured" | "degraded"
+  detail: string
+  last_heartbeat?: string | null
+  age_seconds?: number
+}
+
+type HealthResponse = {
+  status: "healthy" | "degraded"
+  checked_at?: string
+  components?: Record<string, HealthComponent>
+}
 
 type HealthCardProps = {
   name: string
   description: string
-  status: "healthy" | "unavailable" | "not_exposed"
+  status: "healthy" | "unavailable" | "configured" | "not_exposed"
   icon: React.ComponentType<{ className?: string }>
   detail: string
 }
@@ -41,6 +52,11 @@ function HealthCard({
       label: "Unavailable",
       dot: "bg-red-500",
       badge: "bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300",
+    },
+    configured: {
+      label: "Configured",
+      dot: "bg-amber-500",
+      badge: "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300",
     },
     not_exposed: {
       label: "Not exposed",
@@ -82,7 +98,7 @@ export default function DeveloperSystemHealth() {
   })
 
   const apiReachable = !query.isError && !query.isLoading
-  const apiStatus = query.isError ? "unavailable" : query.isLoading ? "not_exposed" : "healthy"
+  const apiStatus: HealthCardProps["status"] = query.isError ? "unavailable" : query.isLoading ? "not_exposed" : "healthy"
 
   return (
     <div className="space-y-6">
@@ -125,43 +141,43 @@ export default function DeveloperSystemHealth() {
               ? "Checking /health…"
               : query.isError
                 ? "The health endpoint could not be reached."
-                : "Verified by a successful GET /health request."
+                : query.data?.components?.api?.detail ?? "FastAPI is responding."
           }
         />
         <HealthCard
           name="Redis Streams"
           description="Event queue and consumer transport"
-          status="not_exposed"
+          status={query.data?.components?.redis?.status === "healthy" ? "healthy" : query.isLoading ? "not_exposed" : "unavailable"}
           icon={Radio}
-          detail="No Redis runtime probe is exposed through the current frontend API."
+          detail={query.data?.components?.redis?.detail ?? "Waiting for the backend health probe."}
         />
         <HealthCard
           name="PostgreSQL"
           description="Audit history and recovery state"
-          status="not_exposed"
+          status={query.data?.components?.database?.status === "healthy" ? "healthy" : query.isLoading ? "not_exposed" : "unavailable"}
           icon={Database}
-          detail="No database connectivity probe is exposed through the current frontend API."
+          detail={query.data?.components?.database?.detail ?? "Waiting for the backend health probe."}
         />
         <HealthCard
           name="Recovery Worker"
           description="Event consumer and orchestration"
-          status="not_exposed"
+          status={query.data?.components?.worker?.status === "healthy" ? "healthy" : query.isLoading ? "not_exposed" : "unavailable"}
           icon={Activity}
-          detail="Worker heartbeat is not exposed through the current frontend API."
+          detail={query.data?.components?.worker?.detail ?? "Waiting for worker heartbeat."}
         />
         <HealthCard
           name="Recovery Scheduler"
           description="Due-attempt polling and stopping rules"
-          status="not_exposed"
+          status={query.data?.components?.scheduler?.status === "healthy" ? "healthy" : query.isLoading ? "not_exposed" : "unavailable"}
           icon={HeartPulse}
-          detail="Scheduler heartbeat is not exposed through the current frontend API."
+          detail={query.data?.components?.scheduler?.detail ?? "Waiting for scheduler heartbeat."}
         />
         <HealthCard
           name="Razorpay"
           description="Payment execution and outcome provider"
-          status="not_exposed"
+          status={query.data?.components?.razorpay?.status === "configured" ? "configured" : query.isLoading ? "not_exposed" : "unavailable"}
           icon={Wifi}
-          detail="Provider reachability is not exposed through the current frontend API."
+          detail={query.data?.components?.razorpay?.detail ?? "Waiting for the backend provider configuration probe."}
         />
       </section>
 
@@ -189,10 +205,10 @@ export default function DeveloperSystemHealth() {
                 Verified now
               </p>
               <p className="mt-2 text-sm font-medium text-slate-900 dark:text-white">
-                API reachability
+                Runtime probes
               </p>
               <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                The frontend polls the real /health endpoint every 15 seconds.
+                The frontend polls the real /health endpoint every 15 seconds and displays DB, Redis, worker, scheduler, and provider configuration state.
               </p>
             </div>
             <div className="rounded-xl bg-slate-50 p-4 dark:bg-slate-950">
@@ -200,10 +216,10 @@ export default function DeveloperSystemHealth() {
                 Needs runtime probes
               </p>
               <p className="mt-2 text-sm font-medium text-slate-900 dark:text-white">
-                Redis, DB, worker, scheduler, provider
+                External provider reachability
               </p>
               <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                These remain explicitly unverified until the backend exposes probes.
+                Razorpay is reported as configured rather than falsely claiming live provider reachability.
               </p>
             </div>
           </div>

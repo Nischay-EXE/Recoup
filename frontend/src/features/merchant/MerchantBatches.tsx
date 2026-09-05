@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { motion } from "motion/react"
-import { Activity, ArrowRight, Layers3, Play, Plus, X } from "lucide-react"
+import { Activity, ArrowRight, Layers3, Play, Plus, RotateCcw, Square, Trash2, X } from "lucide-react"
 
 import { apiGet } from "../../lib/api"
 import { formatDateTime } from "../../lib/formatters"
@@ -24,53 +24,80 @@ function StatusBadge({ status }: { status: string }) {
         : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
     }`}>
       <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-blue-500" : "bg-slate-400"}`} />
-      {active ? "Active" : "Completed"}
+      {active ? "Active" : "Disabled"}
     </span>
   )
 }
 
-function BatchCard({ batch }: { batch: RecoveryBatch }) {
+function BatchCard({
+  batch,
+  onToggle,
+  onDelete,
+  busy,
+}: {
+  batch: RecoveryBatch
+  onToggle: (batch: RecoveryBatch) => void
+  onDelete: (batch: RecoveryBatch) => void
+  busy: string | null
+}) {
+  const active = batch.status === "active"
   return (
-    <Link to={`/merchant/batches/${batch.batch_id}`} className="block">
-      <motion.div
-        whileHover={{ y: -2 }}
-        className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <Layers3 size={17} className="text-blue-500" />
-              <h2 className="truncate font-semibold text-slate-950 dark:text-white">{batch.name}</h2>
-            </div>
-            <p className="mt-1 font-mono text-[11px] text-slate-400">{batch.batch_id}</p>
+    <motion.div
+      whileHover={{ y: -2 }}
+      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Layers3 size={17} className="text-blue-500" />
+            <h2 className="truncate font-semibold text-slate-950 dark:text-white">{batch.name}</h2>
           </div>
-          <StatusBadge status={batch.status} />
+          <p className="mt-1 font-mono text-[11px] text-slate-400">{batch.batch_id}</p>
         </div>
+        <StatusBadge status={batch.status} />
+      </div>
 
-        <p className="mt-4 line-clamp-2 text-sm text-slate-500 dark:text-slate-400">
-          {batch.description || "Events and recovery activity captured from the batch start onward."}
-        </p>
+      <p className="mt-4 line-clamp-2 text-sm text-slate-500 dark:text-slate-400">
+        {batch.description || "Events and recovery activity captured from the batch start onward."}
+      </p>
 
-        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {[
-            ["Events", batch.event_count.toLocaleString("en-IN")],
-            ["Cases", batch.case_count.toLocaleString("en-IN")],
-            ["At risk", currency(batch.amount_at_risk)],
-            ["Recovered", currency(batch.amount_recovered)],
-          ].map(([label, value]) => (
-            <div key={label} className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950">
-              <p className="text-[11px] uppercase tracking-wide text-slate-400">{label}</p>
-              <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{value}</p>
-            </div>
-          ))}
+      <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[
+          ["Events", batch.event_count.toLocaleString("en-IN")],
+          ["Cases", batch.case_count.toLocaleString("en-IN")],
+          ["At risk", currency(batch.amount_at_risk)],
+          ["Recovered", currency(batch.amount_recovered)],
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-xl bg-slate-50 p-3 dark:bg-slate-950">
+            <p className="text-[11px] uppercase tracking-wide text-slate-400">{label}</p>
+            <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 dark:border-slate-800">
+        <span className="text-xs text-slate-500 dark:text-slate-400">Started {formatDateTime(batch.started_at)}</span>
+        <div className="flex items-center gap-2">
+          {active ? (
+            <button type="button" onClick={() => onToggle(batch)} disabled={busy === batch.batch_id} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+              <Square size={12} /> {busy === batch.batch_id ? "Working…" : "Disable"}
+            </button>
+          ) : (
+            <>
+              <button type="button" onClick={() => onToggle(batch)} disabled={busy === batch.batch_id} className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 px-2.5 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:opacity-50 dark:border-blue-900/60 dark:text-blue-300 dark:hover:bg-blue-950/30">
+                <RotateCcw size={12} /> {busy === batch.batch_id ? "Working…" : "Enable"}
+              </button>
+              <button type="button" onClick={() => onDelete(batch)} disabled={busy === batch.batch_id} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/60 dark:text-red-300 dark:hover:bg-red-950/30">
+                <Trash2 size={12} /> Delete
+              </button>
+            </>
+          )}
+          <Link to={`/merchant/batches/${batch.batch_id}`} className="inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:underline dark:text-blue-400">
+            Open batch <ArrowRight size={13} />
+          </Link>
         </div>
-
-        <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
-          <span>Started {formatDateTime(batch.started_at)}</span>
-          <span className="flex items-center gap-1 text-blue-600 dark:text-blue-400">Open batch <ArrowRight size={13} /></span>
-        </div>
-      </motion.div>
-    </Link>
+      </div>
+    </motion.div>
   )
 }
 
@@ -79,6 +106,7 @@ export default function MerchantBatches() {
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [busyBatch, setBusyBatch] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
@@ -115,6 +143,55 @@ export default function MerchantBatches() {
     }
   }
 
+  async function toggleBatch(batch: RecoveryBatch) {
+    const active = batch.status === "active"
+    const action = active ? "disable" : "enable"
+    const message = active
+      ? `Disable "${batch.name}"?\n\nNew incoming events will no longer be assigned to this batch. Existing records stay intact.`
+      : `Enable "${batch.name}"?\n\nNew incoming events will be assigned to this batch. Another active batch cannot exist at the same time.`
+    if (!window.confirm(message)) return
+
+    setBusyBatch(batch.batch_id)
+    setError(null)
+    try {
+      const endpoint = active ? "close" : "open"
+      const response = await fetch(
+        `${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"}/recovery/batches/${encodeURIComponent(batch.batch_id)}/${endpoint}`,
+        { method: "POST" },
+      )
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(body?.detail || `Unable to ${action} batch (${response.status})`)
+      }
+      await queryClient.invalidateQueries({ queryKey: ["recovery-batches"] })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Unable to ${action} batch`)
+    } finally {
+      setBusyBatch(null)
+    }
+  }
+
+  async function deleteBatch(batch: RecoveryBatch) {
+    if (!window.confirm(`Delete "${batch.name}"?\n\nThis removes the batch boundary from the operational list. It does NOT delete events, cases, attempts, decisions, or audit history.`)) return
+    setBusyBatch(batch.batch_id)
+    setError(null)
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"}/recovery/batches/${encodeURIComponent(batch.batch_id)}`,
+        { method: "DELETE" },
+      )
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(body?.detail || `Unable to delete batch (${response.status})`)
+      }
+      await queryClient.invalidateQueries({ queryKey: ["recovery-batches"] })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete batch")
+    } finally {
+      setBusyBatch(null)
+    }
+  }
+
   const batches = query.data?.items ?? []
   const activeBatch = batches.find((batch) => batch.status === "active")
 
@@ -137,9 +214,13 @@ export default function MerchantBatches() {
           </div>
         )}
 
-        {query.isLoading ? <div className="grid gap-4 lg:grid-cols-2">{[1,2,3,4].map((i)=><div key={i} className="h-64 animate-pulse rounded-2xl bg-white dark:bg-slate-900" />)}</div> : query.isError ? <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">Unable to load batches.</div> : batches.length === 0 ? <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center dark:border-slate-700 dark:bg-slate-900"><Layers3 className="mx-auto text-slate-400" size={30}/><h2 className="mt-4 font-semibold">No batches yet</h2><p className="mx-auto mt-1 max-w-md text-sm text-slate-500 dark:text-slate-400">Start a batch when you are ready to isolate a new recovery run.</p></div> : <div className="grid gap-4 lg:grid-cols-2">{batches.map((batch)=><BatchCard key={batch.batch_id} batch={batch}/>)}</div>}
+        {error && (
+          <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">{error}</div>
+        )}
 
-        <div className="mt-8 flex items-center gap-2 text-xs text-slate-400"><Activity size={14}/> Historical records remain available in the main dashboard; batches only define a reporting and operational boundary.</div>
+        {query.isLoading ? <div className="grid gap-4 lg:grid-cols-2">{[1,2,3,4].map((i)=><div key={i} className="h-64 animate-pulse rounded-2xl bg-white dark:bg-slate-900" />)}</div> : query.isError ? <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">Unable to load batches.</div> : batches.length === 0 ? <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center dark:border-slate-700 dark:bg-slate-900"><Layers3 className="mx-auto text-slate-400" size={30}/><h2 className="mt-4 font-semibold">No batches yet</h2><p className="mx-auto mt-1 max-w-md text-sm text-slate-500 dark:text-slate-400">Start a batch when you are ready to isolate a new recovery run.</p></div> : <div className="grid gap-4 lg:grid-cols-2">{batches.map((batch)=><BatchCard key={batch.batch_id} batch={batch} onToggle={toggleBatch} onDelete={deleteBatch} busy={busyBatch}/>)}</div>}
+
+        <div className="mt-8 flex items-center gap-2 text-xs text-slate-400"><Activity size={14}/> Disabled batches remain preserved in audit history; new webhook events are assigned only to the current active batch.</div>
       </div>
 
       {showCreate && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"><motion.div initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900"><div className="flex items-start justify-between"><div><h2 className="text-lg font-semibold">Start recovery batch</h2><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">All newly ingested events will be assigned to this batch.</p></div><button onClick={()=>setShowCreate(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"><X size={18}/></button></div><div className="mt-6 space-y-4"><div><label className="text-sm font-medium">Batch name</label><input value={name} onChange={e=>setName(e.target.value)} placeholder="Core recovery E2E — September 2026" className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950"/></div><div><label className="text-sm font-medium">Description <span className="font-normal text-slate-400">optional</span></label><textarea value={description} onChange={e=>setDescription(e.target.value)} rows={3} placeholder="Payment, normal invoice, and partial invoice validation" className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950"/></div>{error&&<div className="rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-300">{error}</div>}<div className="flex justify-end gap-2 pt-2"><button onClick={()=>setShowCreate(false)} className="h-10 rounded-xl px-4 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">Cancel</button><button onClick={startBatch} disabled={!name.trim()||submitting} className="h-10 rounded-xl bg-blue-600 px-4 text-sm font-medium text-white disabled:opacity-50">{submitting?"Starting…":"Start batch"}</button></div></div></motion.div></div>}

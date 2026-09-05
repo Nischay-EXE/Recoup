@@ -136,10 +136,23 @@ def get_recovery_breakdowns(db: Session) -> dict:
             or Decimal("0")
         )
 
-        revenue_object = (
-            revenue_object_type
-            or "unknown"
-        )
+        # RecoveryAttempt rows created before case linkage, or rows whose
+        # case was removed from a test fixture, should not create a misleading
+        # "unknown" bucket in the product metrics. Infer the revenue object
+        # only from deterministic identifiers; never from customer identity.
+        if revenue_object_type in {"payment", "subscription", "invoice"}:
+            revenue_object = revenue_object_type
+        elif attempt.invoice_id:
+            revenue_object = "invoice"
+        elif attempt.subscription_id:
+            revenue_object = "subscription"
+        elif attempt.payment_id or attempt.order_id:
+            revenue_object = "payment"
+        else:
+            # An orphan attempt with no revenue identifier cannot be safely
+            # classified. Keep it out of the revenue-object breakdown rather
+            # than presenting an artificial business category.
+            revenue_object = None
 
         action = attempt.action or "unknown"
         channel = attempt.channel or "unknown"
@@ -153,16 +166,17 @@ def get_recovery_breakdowns(db: Session) -> dict:
         # Revenue object breakdown
         # ---------------------------------------------
 
-        by_revenue_object[revenue_object]["attempts"] += 1
+        if revenue_object is not None:
+            by_revenue_object[revenue_object]["attempts"] += 1
 
-        if is_recovered:
+            if is_recovered:
+                by_revenue_object[revenue_object][
+                    "recovered_attempts"
+                ] += 1
+
             by_revenue_object[revenue_object][
-                "recovered_attempts"
-            ] += 1
-
-        by_revenue_object[revenue_object][
-            "amount_recovered"
-        ] += amount_recovered
+                "amount_recovered"
+            ] += amount_recovered
 
         # ---------------------------------------------
         # Action breakdown
