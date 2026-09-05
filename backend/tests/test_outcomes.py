@@ -90,3 +90,64 @@ def test_duplicate_success_does_not_change_succeeded_attempt():
 
     db.commit.assert_not_called()
     db.refresh.assert_not_called()
+
+
+def test_invoice_final_payment_keeps_cumulative_case_amount():
+    from app.state.outcomes import mark_invoice_payment_succeeded
+
+    attempt = SimpleNamespace(
+        id=883,
+        status="sent",
+        case_id="case_invoice_001",
+        order_id=None,
+        payment_id=None,
+        subscription_id=None,
+        invoice_id="inv_001",
+        amount_at_risk=Decimal("157000.00"),
+        amount_recovered=None,
+        resolved_at=None,
+    )
+    case = SimpleNamespace(
+        case_id="case_invoice_001",
+        amount_at_risk=Decimal("357000.00"),
+        amount_recovered=Decimal("200000.00"),
+        status="open",
+        resolved_at=None,
+        current_payment_id=None,
+    )
+    normalized = SimpleNamespace(
+        event_id="evt_invoice_paid",
+        invoice_id="inv_001",
+        payment_id="pay_final",
+        amount=Decimal("157000.00"),
+        amount_paid=Decimal("357000.00"),
+        amount_due=Decimal("0.00"),
+    )
+    db = MagicMock()
+
+    with (
+        patch("app.state.outcomes.get_recovery_case", return_value=case),
+        patch(
+            "app.state.outcomes._invoice_financial_state",
+            return_value=(
+                Decimal("357000.00"),
+                Decimal("357000.00"),
+                Decimal("0.00"),
+            ),
+        ),
+    ):
+        result = mark_invoice_payment_succeeded(
+            attempt=attempt,
+            normalized=normalized,
+            db=db,
+        )
+
+    assert result is attempt
+    assert attempt.status == "succeeded"
+    assert attempt.amount_recovered == Decimal("157000.00")
+    assert case.amount_at_risk == Decimal("357000.00")
+    assert case.amount_recovered == Decimal("357000.00")
+    assert case.status == "recovered"
+    assert case.current_payment_id == "pay_final"
+    db.commit.assert_called_once()
+    db.refresh.assert_called_once_with(attempt)

@@ -241,15 +241,182 @@ def record_invoice_partial_payment(
 
     return case
 
+def _invoice_financial_state(
+    normalized: NormalizedEvent,
+    db: Session,
+    case: RecoveryCase,
+) -> tuple[Decimal, Decimal, Decimal]:
+    """Return (invoice_total, cumulative_paid, amount_due) from the authoritative invoice state."""
+
+    invoice_total = case.amount_at_risk or Decimal("0.00")
+    cumulative_paid = normalized.amount_paid
+    amount_due = normalized.amount_due
+
+    source_event = (
+        db.query(Event)
+        .filter(Event.event_id == normalized.event_id)
+        .first()
+    )
+
+    if source_event and isinstance(source_event.payload, dict):
+        invoice_entity = (
+            source_event.payload
+            .get("payload", {})
+            .get("invoice", {})
+            .get("entity", {})
+        )
+        if isinstance(invoice_entity, dict) and invoice_entity:
+            def money(value):
+                if value is None:
+                    return None
+                try:
+                    return Decimal(str(value)) / Decimal("100")
+                except (TypeError, ValueError, ArithmeticError):
+                    return None
+
+            parsed_total = money(invoice_entity.get("amount"))
+            parsed_paid = money(invoice_entity.get("amount_paid"))
+            parsed_due = money(invoice_entity.get("amount_due"))
+
+            if parsed_total is not None:
+                invoice_total = parsed_total
+            if parsed_paid is not None:
+                cumulative_paid = parsed_paid
+            if parsed_due is not None:
+                amount_due = parsed_due
+
+    # For a final invoice.paid webhook, amount_due=0 is authoritative even
+    # when the normalized amount field represents only the nested payment.
+    if cumulative_paid is None or (
+        cumulative_paid <= Decimal("0.00")
+        and amount_due is not None
+        and amount_due <= Decimal("0.00")
+    ):
+        if amount_due is not None and amount_due <= Decimal("0.00"):
+            cumulative_paid = invoice_total
+        else:
+            cumulative_paid = normalized.amount or Decimal("0.00")
+
+    cumulative_paid = min(
+        max(cumulative_paid, Decimal("0.00")),
+        invoice_total,
+    )
+
+    calculated_due = max(
+        invoice_total - cumulative_paid,
+        Decimal("0.00"),
+    )
+    return invoice_total, cumulative_paid, calculated_due
+
+
+def mark_invoice_payment_succeeded(
+    attempt: RecoveryAttempt,
+    normalized: NormalizedEvent,
+    db: Session,
+) -> RecoveryAttempt:
+    """Finalize an invoice recovery using cumulative invoice payment state."""
+
+    if attempt.status in FINAL_STATUSES:
+        return attempt
+
+    if attempt.status != "sent":
+        raise ValueError(
+            f"Cannot mark invoice recovery as succeeded from status "
+            f"'{attempt.status}'. Expected 'sent'."
+        )
+
+    case = get_recovery_case(
+        db,
+        case_id=attempt.case_id,
+        order_id=attempt.order_id,
+        payment_id=attempt.payment_id,
+        subscription_id=attempt.subscription_id,
+        invoice_id=attempt.invoice_id,
+    )
+
+    if case is None and normalized.invoice_id:
+        case = get_recovery_case_by_invoice(
+            db,
+            invoice_id=normalized.invoice_id,
+        )
+
+    if case is None:
+        # Fall back to the normal payment path if there is no invoice case.
+        return mark_recovery_succeeded(
+            attempt,
+            db,
+            normalized.amount or Decimal("0.00"),
+        )
+
+    invoice_total, cumulative_paid, amount_due = _invoice_financial_state(
+        normalized,
+        db,
+        case,
+    )
+
+    previous_recovered = case.amount_recovered or Decimal("0.00")
+    newly_recovered = max(
+        cumulative_paid - previous_recovered,
+        Decimal("0.00"),
+    )
+
+    attempt.status = "succeeded"
+    attempt.amount_recovered = newly_recovered
+    attempt.resolved_at = utc_now()
+
+    case.amount_at_risk = invoice_total
+    case.amount_recovered = cumulative_paid
+    if normalized.payment_id:
+        case.current_payment_id = normalized.payment_id
+
+    if amount_due <= Decimal("0.00"):
+        case.status = "recovered"
+        case.resolved_at = utc_now()
+    else:
+        case.status = "open"
+        case.resolved_at = None
+
+    # Any scheduled/proposed work for the same invoice is now obsolete.
+    pending_attempts = (
+        db.query(RecoveryAttempt)
+        .filter(
+            RecoveryAttempt.case_id == case.case_id,
+            RecoveryAttempt.id != attempt.id,
+            RecoveryAttempt.status.in_(
+                {"proposed", "approved", "execution_failed"}
+            ),
+        )
+        .all()
+    )
+    for pending_attempt in pending_attempts:
+        pending_attempt.status = "stopped"
+        pending_attempt.resolved_at = utc_now()
+        pending_attempt.execution_error = (
+            "Invoice outcome made this recovery attempt obsolete."
+        )
+
+    db.commit()
+    db.refresh(attempt)
+
+    print(
+        f"[WORKER] Invoice recovery succeeded "
+        f"attempt_id={attempt.id} "
+        f"invoice_id={normalized.invoice_id} "
+        f"invoice_total={invoice_total} "
+        f"previous_recovered={previous_recovered} "
+        f"newly_recovered={newly_recovered} "
+        f"total_recovered={case.amount_recovered} "
+        f"amount_due={amount_due} "
+        f"case_status={case.status}"
+    )
+    return attempt
+
+
 def mark_invoice_recovered_without_attempt(
     normalized: NormalizedEvent,
     db: Session,
 ) -> RecoveryCase | None:
-    """
-    Finalize an invoice case on invoice.paid even when no `sent` recovery
-    attempt can be correlated (for example, payment before a scheduled
-    reminder executes).
-    """
+    """Finalize an invoice case from its cumulative paid state."""
 
     if not normalized.invoice_id:
         return None
@@ -261,22 +428,23 @@ def mark_invoice_recovered_without_attempt(
     if case is None:
         return None
 
-    total_recovered = (
-        normalized.amount
-        if normalized.amount is not None
-        else (
-            normalized.amount_paid
-            if normalized.amount_paid is not None
-            else case.amount_at_risk
-        )
-    ) or Decimal("0.00")
-
-    case.amount_recovered = min(
-        total_recovered,
-        case.amount_at_risk or total_recovered,
+    invoice_total, cumulative_paid, amount_due = _invoice_financial_state(
+        normalized,
+        db,
+        case,
     )
-    case.status = "recovered"
-    case.resolved_at = utc_now()
+
+    case.amount_at_risk = invoice_total
+    case.amount_recovered = cumulative_paid
+    if normalized.payment_id:
+        case.current_payment_id = normalized.payment_id
+
+    if amount_due <= Decimal("0.00"):
+        case.status = "recovered"
+        case.resolved_at = utc_now()
+    else:
+        case.status = "open"
+        case.resolved_at = None
 
     pending_attempts = (
         db.query(RecoveryAttempt)
@@ -288,12 +456,11 @@ def mark_invoice_recovered_without_attempt(
         )
         .all()
     )
-
     for pending_attempt in pending_attempts:
         pending_attempt.status = "stopped"
         pending_attempt.resolved_at = utc_now()
         pending_attempt.execution_error = (
-            "Invoice was fully paid before the scheduled recovery attempt executed."
+            "Invoice outcome made this recovery attempt obsolete."
         )
 
     db.commit()
@@ -304,8 +471,10 @@ def mark_invoice_recovered_without_attempt(
         f"event={normalized.event_id} "
         f"invoice_id={normalized.invoice_id} "
         f"case_id={case.case_id} "
+        f"invoice_total={invoice_total} "
         f"amount_recovered={case.amount_recovered} "
-        f"stopped_scheduled_attempts={len(pending_attempts)}"
+        f"amount_due={amount_due} "
+        f"case_status={case.status}"
     )
     return case
 

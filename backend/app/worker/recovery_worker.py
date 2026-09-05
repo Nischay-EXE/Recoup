@@ -23,6 +23,7 @@ from app.state.correlation import find_recovery_attempt
 
 from app.state.outcomes import (
     mark_recovery_succeeded,
+    mark_invoice_payment_succeeded,
     mark_recovery_failed,
     record_invoice_partial_payment,
     mark_invoice_recovered_without_attempt,
@@ -261,40 +262,21 @@ def process_captured_event(
         )
         return
 
-    recovered_amount = normalized.amount or Decimal("0.00")
-
-    attempt = mark_recovery_succeeded(
-        attempt,
-        db,
-        recovered_amount,
-    )
-
     if normalized.invoice_id:
-        case = (
-            db.query(RecoveryCase)
-            .filter(RecoveryCase.case_id == attempt.case_id)
-            .first()
+        attempt = mark_invoice_payment_succeeded(
+            attempt=attempt,
+            normalized=normalized,
+            db=db,
         )
-        if case is not None:
-            pending_attempts = (
-                db.query(RecoveryAttempt)
-                .filter(
-                    RecoveryAttempt.case_id == case.case_id,
-                    RecoveryAttempt.id != attempt.id,
-                    RecoveryAttempt.status.in_(
-                        {"proposed", "approved", "execution_failed"}
-                    ),
-                )
-                .all()
-            )
-            for pending_attempt in pending_attempts:
-                pending_attempt.status = "stopped"
-                pending_attempt.resolved_at = utc_now()
-                pending_attempt.execution_error = (
-                    "Invoice was fully paid before the scheduled recovery attempt executed."
-                )
-            if pending_attempts:
-                db.commit()
+    else:
+        recovered_amount = normalized.amount or Decimal("0.00")
+        attempt = mark_recovery_succeeded(
+            attempt,
+            db,
+            recovered_amount,
+        )
+
+
 
     print(
         f"[WORKER] Recovery succeeded "
