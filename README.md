@@ -48,8 +48,38 @@ The platform currently models three revenue objects through a common recovery en
 - **Invoice**
 - **Subscription**
 
-
 ---
+## Project Screenshots
+
+### Merchant Dashboard
+
+The merchant portal provides visibility into revenue at risk, recovered revenue, and active recovery cases.
+
+![Merchant dashboard showing revenue at risk, recovered revenue, and active recovery cases in the merchant portal](screenshots/merchant-dashboard.png)
+
+### Recovery Case
+
+Each recovery case provides a complete view of the recovery lifecycle, including AI strategy, guardrail decision, execution, and recovery outcome.
+
+![Recovery case details showing the AI strategy, guardrail decision, execution status, and recovery outcome in a structured lifecycle view](screenshots/recovery-case.png)
+
+### Developer Dashboard
+
+The developer portal provides visibility into system events, AI decisions, and overall system health.
+
+![Developer dashboard showing system events, AI decisions, and overall system health in the developer portal](screenshots/developer-dashboard.png)
+
+### Scheduled Recovery
+
+Recovery actions can be scheduled for later execution, such as SMS or email reminders.
+
+![Scheduled recovery view showing recovery actions planned for later execution, including SMS and email reminders](screenshots/scheduled-recovery.png)
+
+### Invoice Recovery
+
+The system supports partial invoice payments and tracks the remaining amount until the invoice is fully recovered.
+
+![Invoice recovery view showing a partial payment and the remaining amount required to fully recover the invoice](screenshots/invoice-recovery.png)
 
 ## Core features
 
@@ -380,76 +410,19 @@ Batch drilldown includes event and case exploration, normalized event data, reco
 
 ---
 
-# Architecture
+## Architecture
 
-```text
-                         REVENUE SIGNALS
-                                │
-              ┌─────────────────┼─────────────────┐
-              │                 │                 │
-       payment.failed    subscription.*     invoice.*
-              │                 │                 │
-              └─────────────────┼─────────────────┘
-                                │
-                                ▼
-                     FASTAPI WEBHOOK GATEWAY
-                                │
-                    ┌───────────┴───────────┐
-                    ▼                       ▼
-                PostgreSQL              Redis Stream
-             Raw + Normalized               │
-                 Events                     ▼
-                                      Recovery Worker
-                                             │
-                              ┌──────────────┴──────────────┐
-                              ▼                             ▼
-                       Context Builder                Case Manager
-                              │                             │
-                              └──────────────┬──────────────┘
-                                             ▼
-                                       Analyst Agent
-                                             │
-                                             ▼
-                                      Strategist Agent
-                                             │
-                                             ▼
-                                    Policy / Guardrail
-                                             │
-                                    ┌────────┴────────┐
-                                    ▼                 ▼
-                                 Blocked           Approved
-                                                        │
-                                                        ▼
-                                                  Recovery Attempt
-                                                        │
-                                                        ▼
-                                                 Executor Agent
-                                                        │
-                                      ┌─────────────────┴─────────────────┐
-                                      ▼                                   ▼
-                                Razorpay MCP                         Scheduler
-                                      │                                   │
-                                      └─────────────────┬─────────────────┘
-                                                        ▼
-                                               Customer Payment /
-                                               Communication
-                                                        │
-                                                        ▼
-                                                Outcome Webhook
-                                                        │
-                                                        ▼
-                                               Correlation Engine
-                                                        │
-                                                        ▼
-                                                 Recovery Case
-                                                        │
-                                      ┌─────────────────┴─────────────────┐
-                                      ▼                                   ▼
-                                  Recovered                       Open / Escalated
-```
+The Revenue Recovery Agent follows an event-driven recovery pipeline with AI-assisted decision making and deterministic execution controls.
 
----
+![Revenue Recovery Agent Architecture](docs/Architecture/Recoup%20Architecture.png)
 
+### Core Flow
+
+**Razorpay Events → FastAPI → PostgreSQL / Redis → Recovery Worker → Analyst Agent → Strategist Agent → Policy Guardrail → Executor → Razorpay MCP → Outcome Correlation → Recovery Case**
+
+The system follows a simple principle:
+
+> **AI proposes. Deterministic policy decides. Controlled capabilities execute. Outcome correlation verifies.**
 # Technology stack
 
 | Layer | Technology |
