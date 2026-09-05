@@ -1,4 +1,4 @@
-# Revenue Recovery Agent
+# Recoup: A Revenue Recovery Agent
 
 An event-driven AI revenue recovery platform that turns payment and receivables events into controlled, auditable recovery actions — and measures the revenue actually recovered.
 
